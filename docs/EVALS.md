@@ -9,6 +9,9 @@
 - Working and output profiles are present, described, hashed, and independently verified.
 - NaN/Inf, malformed images, unprofiled CMYK, unsafe paths, missing tools, timeouts, and non-zero subprocess exits are surfaced.
 - Repeated renders under the same fingerprint have identical decoded-pixel hashes.
+- Repeated RAW developments use fresh isolated settings/cache directories and require zero decoded-pixel differences under the same fingerprint; container hashes may differ when the external engine writes timestamps.
+- RAW output must be 16-bit, profile-tagged, correctly oriented, and admitted to ACEScg only after the intermediate profile is verified.
+- Lensfun camera/lens database matches and actual-application confirmation are separate fields; absent CLI confirmation must remain false.
 - Cross-platform decoded 8-bit output allows maximum channel difference 1 and RMSE 0.25; file-byte equality is not promised across encoders.
 - Manifest records source, schema, plan, recipe, tool, profile, intermediate, candidate, selection, master, and derivative provenance.
 

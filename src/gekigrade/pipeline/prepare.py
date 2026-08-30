@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -8,7 +9,15 @@ from typing import Any, cast
 import numpy as np
 from PIL import Image, ImageDraw
 
-from gekigrade.adapters.imagemagick import make_preview, normalize_jpeg
+from gekigrade.adapters.imagemagick import make_preview, normalize_jpeg, normalize_profiled_tiff
+from gekigrade.adapters.rawtherapee import (
+    DEFAULT_RAW_PROFILE,
+    LENSFUN_DATABASE,
+    RAWTHERAPEE_CLI,
+    RAWTHERAPEE_OUTPUT_PROFILE,
+    develop_raw,
+    inspect_lensfun_support,
+)
 from gekigrade.analysis.metrics import analyze_srgb
 from gekigrade.doctor import ACESCG_PROFILE, SRGB_PROFILE, build_doctor_report, sha256_file
 from gekigrade.domain.jsonio import write_json
@@ -19,9 +28,12 @@ from gekigrade.grading.looks import looks_as_json
 
 MAX_SOURCE_BYTES = 1024 * 1024 * 1024
 MAX_PIXEL_COUNT = 200_000_000
+EXIFTOOL = Path("/opt/homebrew/bin/exiftool")
 
 
-def _inspect_jpeg(path: Path) -> tuple[dict[str, Any], bytes | None]:
+def _inspect_jpeg(
+    path: Path, *, exiftool_executable: Path = EXIFTOOL
+) -> tuple[dict[str, Any], bytes | None]:
     if path.is_symlink() or not path.is_file():
         raise ValueError("source must be a regular, non-symlink JPEG")
     if path.stat().st_size > MAX_SOURCE_BYTES:
@@ -48,7 +60,7 @@ def _inspect_jpeg(path: Path) -> tuple[dict[str, Any], bytes | None]:
     oriented_width, oriented_height = (
         (height, width) if orientation in {5, 6, 7, 8} else (width, height)
     )
-    metadata = _read_exiftool(path)
+    metadata = _read_exiftool(path, executable=exiftool_executable)
     result = {
         "schema_version": "1.0.0",
         "source_path": str(path.resolve()),
@@ -74,12 +86,19 @@ def inspect_jpeg(path: Path) -> dict[str, Any]:
     return result
 
 
-def _read_exiftool(path: Path) -> dict[str, Any]:
+def _read_exiftool(path: Path, *, executable: Path = EXIFTOOL) -> dict[str, Any]:
+    if not executable.is_file() or executable.stat().st_mode & 0o111 == 0:
+        raise RuntimeError("ExifTool is unavailable; run `geki doctor`")
     result = subprocess.run(
         [
-            "/opt/homebrew/bin/exiftool",
+            str(executable),
             "-json",
             "-n",
+            "-FileType",
+            "-MIMEType",
+            "-ImageWidth",
+            "-ImageHeight",
+            "-Orientation",
             "-Make",
             "-Model",
             "-LensModel",
@@ -104,6 +123,85 @@ def _read_exiftool(path: Path) -> dict[str, Any]:
     record = cast(dict[str, Any], records[0])
     record.pop("SourceFile", None)
     return record
+
+
+def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("source must be a regular, non-symlink ARW")
+    if path.stat().st_size > MAX_SOURCE_BYTES:
+        raise ValueError("ARW exceeds the 1 GiB safety limit")
+    with path.open("rb") as stream:
+        if stream.read(4) not in {b"II*\x00", b"MM\x00*"}:
+            raise ValueError("source does not have a TIFF-based RAW signature")
+    metadata = _read_exiftool(path, executable=exiftool_executable)
+    if metadata.get("FileType") != "ARW" or metadata.get("MIMEType") != "image/x-sony-arw":
+        raise ValueError("source metadata does not identify a Sony ARW")
+    try:
+        width = int(metadata["ImageWidth"])
+        height = int(metadata["ImageHeight"])
+        orientation = int(metadata.get("Orientation", 1))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("ARW dimensions or orientation are missing or invalid") from exc
+    if width <= 0 or height <= 0 or width * height > MAX_PIXEL_COUNT:
+        raise ValueError("ARW dimensions exceed the 200 megapixel safety limit")
+    if orientation not in range(1, 9):
+        raise ValueError("ARW EXIF orientation is outside the supported range")
+    oriented_width, oriented_height = (
+        (height, width) if orientation in {5, 6, 7, 8} else (width, height)
+    )
+    capture_keys = (
+        "Make",
+        "Model",
+        "LensModel",
+        "ExposureTime",
+        "FNumber",
+        "ISO",
+        "FocalLength",
+        "DateTimeOriginal",
+    )
+    return {
+        "schema_version": "1.0.0",
+        "source_path": str(path.resolve()),
+        "source_sha256": sha256_file(path),
+        "format": "ARW",
+        "stored_dimensions": {"width": width, "height": height},
+        "oriented_dimensions": {"width": oriented_width, "height": oriented_height},
+        "exif_orientation": orientation,
+        "color_mode": "camera-raw",
+        "icc_profile": {
+            "embedded": False,
+            "byte_length": 0,
+            "assumption": "camera RAW is developed through the pinned RawTherapee profile",
+        },
+        "capture_metadata": {key: metadata[key] for key in capture_keys if key in metadata},
+        "warnings": [],
+    }
+
+
+def inspect_photo(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[str, Any]:
+    with path.open("rb") as stream:
+        signature = stream.read(4)
+    if signature[:3] == b"\xff\xd8\xff":
+        result, _ = _inspect_jpeg(path, exiftool_executable=exiftool_executable)
+        return result
+    if signature in {b"II*\x00", b"MM\x00*"}:
+        return _inspect_raw(path, exiftool_executable=exiftool_executable)
+    raise ValueError("unsupported source format; expected JPEG or Sony ARW")
+
+
+def _embedded_profile(path: Path) -> dict[str, Any]:
+    try:
+        with Image.open(path) as image:
+            profile = image.info.get("icc_profile")
+    except (OSError, SyntaxError) as exc:
+        raise RuntimeError(f"developed TIFF cannot be decoded: {exc}") from exc
+    if not profile:
+        raise RuntimeError("developed TIFF has no embedded ICC profile")
+    return {
+        "embedded": True,
+        "byte_length": len(profile),
+        "sha256": hashlib.sha256(profile).hexdigest(),
+    }
 
 
 def _load_srgb(path: Path) -> np.ndarray[Any, np.dtype[np.float32]]:
@@ -188,12 +286,78 @@ def _artifact_manifest(job: Path, source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def prepare_job(source_path: Path, output_path: Path) -> Path:
-    source, embedded_profile = _inspect_jpeg(source_path)
+def prepare_job(
+    source_path: Path,
+    output_path: Path,
+    *,
+    exiftool_executable: Path = EXIFTOOL,
+    rawtherapee_executable: Path = RAWTHERAPEE_CLI,
+    raw_profile: Path = DEFAULT_RAW_PROFILE,
+    raw_output_profile: Path = RAWTHERAPEE_OUTPUT_PROFILE,
+    lensfun_database: Path = LENSFUN_DATABASE,
+) -> Path:
+    with source_path.open("rb") as stream:
+        signature = stream.read(4)
+    if signature[:3] == b"\xff\xd8\xff":
+        source, embedded_profile = _inspect_jpeg(
+            source_path, exiftool_executable=exiftool_executable
+        )
+    elif signature in {b"II*\x00", b"MM\x00*"}:
+        source = _inspect_raw(source_path, exiftool_executable=exiftool_executable)
+        embedded_profile = None
+    else:
+        raise ValueError("unsupported source format; expected JPEG or Sony ARW")
+    source_format = source["format"]
     job = create_job_directory(source_path, output_path)
     working = job / "intermediate/working.tif"
     preview = job / "preview.jpg"
-    normalize_jpeg(source_path.resolve(), working, has_profile=embedded_profile is not None)
+    if source_format == "JPEG":
+        normalize_jpeg(source_path.resolve(), working, has_profile=embedded_profile is not None)
+    else:
+        raw_work = job / "intermediate/rawtherapee"
+        developed = raw_work / "developed.tif"
+        result = develop_raw(
+            source_path,
+            developed,
+            work_directory=raw_work,
+            profile=raw_profile,
+            executable=rawtherapee_executable,
+        )
+        intermediate_profile = _embedded_profile(developed)
+        if not raw_output_profile.is_file():
+            raise RuntimeError("expected RawTherapee output ICC profile is unavailable")
+        expected_intermediate_profile_sha256 = sha256_file(raw_output_profile)
+        if intermediate_profile["sha256"] != expected_intermediate_profile_sha256:
+            raise RuntimeError("developed TIFF ICC profile does not match the expected profile")
+        normalize_profiled_tiff(developed, working)
+        with Image.open(working) as normalized:
+            source["oriented_dimensions"] = {
+                "width": normalized.width,
+                "height": normalized.height,
+            }
+        source["raw_development"] = {
+            "engine": "RawTherapee",
+            "profile_path": str(result.profile_path.relative_to(job)),
+            "profile_sha256": result.profile_sha256,
+            "run_report_path": str(result.report_path.relative_to(job)),
+            "developed_tiff_sha256": result.output_sha256,
+            "intermediate_profile": intermediate_profile,
+            "expected_intermediate_profile_sha256": expected_intermediate_profile_sha256,
+            "working_profile_sha256": sha256_file(ACESCG_PROFILE),
+            "requested_capabilities": {
+                "demosaic": "AMaZE",
+                "white_balance": "camera",
+                "highlight_recovery": "Coloropp",
+                "raw_chromatic_aberration": True,
+                "lens_distortion": True,
+                "lens_vignetting": True,
+                "denoising": False,
+                "sharpening": False,
+            },
+            "lens_correction": inspect_lensfun_support(
+                source["capture_metadata"], database=lensfun_database
+            ),
+        }
     make_preview(working, preview)
     pixels = _load_srgb(preview)
     analysis = analyze_srgb(pixels)

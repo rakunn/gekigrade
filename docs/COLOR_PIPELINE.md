@@ -2,15 +2,17 @@
 
 ## Confirmed local behavior
 
-The inspected ImageMagick build is Q16-HDRI and includes LittleCMS, TIFF, OpenEXR, JPEG, PNG, and RAW delegates. Python 3.12 Apple Silicon wheels for OpenImageIO 3.1.16 and OpenColorIO 2.5.2 import successfully. A synthetic embedded-sRGB JPEG converted twice to 16-bit ACEScg TIFF produced identical file hashes in the environment spike. Returning through the pinned OCIO transform produced a small difference attributable to JPEG re-encoding. This confirms compatibility, not photographic quality.
+The inspected ImageMagick build is Q16-HDRI and includes LittleCMS, TIFF, OpenEXR, JPEG, PNG, and RAW delegates. Python 3.12 Apple Silicon wheels for OpenImageIO 3.1.16 and OpenColorIO 2.5.2 import successfully. A synthetic embedded-sRGB JPEG converted twice to 16-bit ACEScg TIFF produced identical file hashes in the environment spike. A private Sony ILCE-7RM5 ARW developed twice through RawTherapee 5.13 produced zero differing decoded pixels; the normalized ACEScg TIFFs were also byte-identical. This confirms compatibility and same-machine determinism, not general photographic quality.
 
 ## Input interpretation
 
 An RGB JPEG with a valid ICC profile is transformed from that profile. An RGB JPEG without a profile is assigned sRGB and records a warning and assumption. An unprofiled CMYK JPEG is rejected. EXIF orientation is applied exactly once before the working image is stored.
 
+A Sony ARW is accepted only when its TIFF-based signature and ExifTool type/MIME metadata agree. RawTherapee uses camera white balance, AMaZE demosaicing, Coloropp highlight recovery, automatic RAW chromatic-aberration correction, and requests Lensfun distortion/vignetting correction. Denoising and sharpening are disabled at development so the later recipe retains control. The committed PP3, executable, application version, output profile, Lensfun database, arguments, logs, and source/output hashes are recorded. Requested corrections, calibration types present in the matched lens entry, and actual-application confirmation are separate fields.
+
 ## Working representation
 
-Milestone 1 uses 16-bit integer RGB TIFF tagged with the macOS `ACESCG Linear.icc` profile. The manifest records profile path, description, and SHA-256. OpenImageIO reads pixels as normalized float32 for processing. TIFF is selected over OpenEXR because this slice can inspect its ICC payload end to end and it aligns with the first RAW adapter's documented output.
+The working representation is 16-bit integer RGB TIFF tagged with the macOS `ACESCG Linear.icc` profile. JPEG reaches it through LittleCMS directly. RAW first produces a 16-bit TIFF whose embedded ICC hash must equal the installed RawTherapee `RTv4_Large` profile; a mismatch blocks the job. LittleCMS then transforms that profile into ACEScg and strips non-deterministic development metadata before reattaching the ACEScg profile. The manifest records profile paths and SHA-256 values. OpenImageIO reads pixels as normalized float32 for recipe processing.
 
 ## Operation ordering and spaces
 

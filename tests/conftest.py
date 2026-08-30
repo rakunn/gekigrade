@@ -8,6 +8,13 @@ from PIL import Image
 from PIL.TiffImagePlugin import IFDRational
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    integration_directory = Path(__file__).parent / "integration"
+    for item in items:
+        if Path(str(item.path)).is_relative_to(integration_directory):
+            item.add_marker(pytest.mark.integration)
+
+
 @pytest.fixture
 def tagged_oriented_jpeg(tmp_path: Path) -> Path:
     width, height = 320, 240

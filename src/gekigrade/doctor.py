@@ -15,6 +15,11 @@ import OpenImageIO as oiio
 import PyOpenColorIO as ocio
 from PIL import Image
 
+from gekigrade.adapters.rawtherapee import (
+    DEFAULT_RAW_PROFILE,
+    LENSFUN_DATABASE,
+    RAWTHERAPEE_OUTPUT_PROFILE,
+)
 from gekigrade.adapters.tools import ExternalTool, ToolStatus, inspect_tool
 
 ACESCG_PROFILE = Path("/System/Library/ColorSync/Profiles/ACESCG Linear.icc")
@@ -137,6 +142,9 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
     profiles = {
         "acescg": _profile_status(ACESCG_PROFILE),
         "srgb": _profile_status(SRGB_PROFILE),
+        "raw_development_pp3": _profile_status(DEFAULT_RAW_PROFILE),
+        "rawtherapee_output": _profile_status(RAWTHERAPEE_OUTPUT_PROFILE),
+        "lensfun_database": _profile_status(LENSFUN_DATABASE),
     }
     prerequisites_ready = (
         tools["exiftool"].available
@@ -148,6 +156,13 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
     if run_color_probe and prerequisites_ready and tools["imagemagick"].path:
         color_probe = _color_probe(tools["imagemagick"].path)
     ready = prerequisites_ready and (color_probe is None or color_probe.get("passed") is True)
+    ready_for_raw = (
+        ready
+        and tools["rawtherapee"].available
+        and profiles["raw_development_pp3"]["available"] is True
+        and profiles["rawtherapee_output"]["available"] is True
+        and profiles["lensfun_database"]["available"] is True
+    )
     return {
         "schema_version": "1.0.0",
         "platform": {
@@ -165,7 +180,6 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
         "profiles": profiles,
         "color_probe": color_probe,
         "ready_for_jpeg": ready,
-        "raw_status": (
-            "installed-unverified-with-arw" if tools["rawtherapee"].available else "not-installed"
-        ),
+        "ready_for_raw": ready_for_raw,
+        "raw_status": "adapter-ready" if ready_for_raw else "not-ready",
     }

@@ -55,6 +55,29 @@ def normalize_jpeg(source: Path, target: Path, *, has_profile: bool) -> None:
     run_magick(arguments)
 
 
+def normalize_profiled_tiff(source: Path, target: Path) -> None:
+    run_magick(
+        [
+            str(source),
+            "-auto-orient",
+            "-profile",
+            str(ACESCG_PROFILE),
+            "-alpha",
+            "off",
+            "-depth",
+            "16",
+            "-strip",
+            "-profile",
+            str(ACESCG_PROFILE),
+            "-define",
+            "tiff:bits-per-sample=16",
+            "-compress",
+            "zip",
+            f"TIFF:{target}",
+        ]
+    )
+
+
 def make_preview(source: Path, target: Path, *, max_edge: int = 2048) -> None:
     run_magick(
         [

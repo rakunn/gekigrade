@@ -13,7 +13,7 @@ from gekigrade.domain.jsonio import read_json
 from gekigrade.domain.models import EditPlan
 from gekigrade.grading.looks import LookError, get_look
 from gekigrade.pipeline.export import export_job, select_candidate
-from gekigrade.pipeline.prepare import inspect_jpeg, prepare_job
+from gekigrade.pipeline.prepare import inspect_photo, prepare_job
 from gekigrade.pipeline.qa import run_qa
 from gekigrade.pipeline.render import PlanValidationError, render_job, validate_plan_for_job
 
@@ -56,9 +56,9 @@ def doctor() -> None:
 
 @app.command("inspect")
 def inspect_command(photo: Annotated[Path, typer.Argument(exists=True, readable=True)]) -> None:
-    """Inspect a JPEG and its trusted subset of metadata without writing files."""
+    """Inspect a JPEG or Sony ARW without writing files."""
     try:
-        _emit(inspect_jpeg(photo))
+        _emit(inspect_photo(photo))
     except (ValueError, RuntimeError, OSError) as exc:
         _fail(str(exc))
 
@@ -68,7 +68,7 @@ def prepare(
     photo: Annotated[Path, typer.Argument(exists=True, readable=True)],
     output: Annotated[Path, typer.Option("--output", "-o")],
 ) -> None:
-    """Create an immutable-source analysis job for one JPEG."""
+    """Create an immutable-source analysis job for one JPEG or Sony ARW."""
     try:
         job = prepare_job(photo, output)
         _emit({"job": str(job), "state": "prepared"})

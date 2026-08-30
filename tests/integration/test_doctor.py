@@ -24,4 +24,8 @@ def test_doctor_reports_raw_adapter_separately_from_jpeg_readiness() -> None:
 
     assert report["tools"]["rawtherapee"]["available"] is True
     assert report["tools"]["rawtherapee"]["version"] == "5.13"
-    assert report["raw_status"] == "installed-unverified-with-arw"
+    assert report["profiles"]["raw_development_pp3"]["sha256"]
+    assert report["profiles"]["rawtherapee_output"]["sha256"]
+    assert report["profiles"]["lensfun_database"]["sha256"]
+    assert report["ready_for_raw"] is True
+    assert report["raw_status"] == "adapter-ready"

@@ -6,7 +6,7 @@ Use the installed Python 3.12 runtime and a committed `uv.lock`. Python 3.13 rem
 
 ## ADR-002 — RawTherapee as first RAW adapter
 
-Choose RawTherapee 5.13 because explicit, stackable PP3 profiles and 16-bit TIFF CLI output form a compact reproducibility boundary. Defer darktable because its XMP history plus application configuration, presets, and database state add more inputs to freeze. RAW output is not claimed until a user-owned ARW is tested.
+Choose RawTherapee 5.13 because explicit, stackable PP3 profiles and 16-bit TIFF CLI output form a compact reproducibility boundary. Defer darktable because its XMP history plus application configuration, presets, and database state add more inputs to freeze. One private user-owned Sony ARW now confirms this adapter path; broader quality remains an evaluation milestone.
 
 ## ADR-003 — 16-bit TIFF intermediate
 
@@ -43,3 +43,7 @@ Candidate rendering never implies selection. `geki select` writes a plan-hash-bo
 ## ADR-011 — deterministic operation semantics
 
 Rotation and resizing use OpenImageIO Lanczos3. Exposure and a bounded Bradford chromatic adaptation operate in linear ACEScg. Contrast, black lift, shoulder, saturation, and analytic look blending operate in ACEScct. Vignette returns to linear ACEScg; unsharp masking is resolution-aware after the encoded-sRGB resize. JPEG chromatic adaptation is explicitly post-development color correction, never described as RAW white balance.
+
+## ADR-012 — RawTherapee development boundary
+
+Sony ARW uses RawTherapee 5.13 with a committed partial PP3 layered only on that version's neutral defaults. Each run receives isolated `RT_SETTINGS` and `RT_CACHE` directories and fixed, non-shell CLI arguments. The profile selects camera white balance, AMaZE, Coloropp highlight recovery, automatic RAW chromatic-aberration correction, requested Lensfun distortion/vignetting correction, no denoising, no sharpening, and `RTv4_Large` 16-bit TIFF output. LittleCMS converts the embedded output profile to the existing ACEScg working TIFF. Requested corrections, calibration types found in the matched lens entry, and actual-application confirmation are recorded independently.

@@ -10,7 +10,7 @@ The initial user is a technically comfortable photographer running one local pho
 
 ## Initial workflow
 
-1. Prepare a JPEG into a safe job directory.
+1. Prepare a JPEG or Sony ARW into a safe job directory.
 2. Inspect metadata, a normalized preview, histograms, clipping, sharpness, crop candidates, looks, and the plan schema.
 3. Have Codex or the user produce a three-candidate plan.
 4. Validate the plan before rendering.
@@ -19,7 +19,7 @@ The initial user is a technically comfortable photographer running one local pho
 
 ## Functional requirements
 
-- One JPEG per job; Sony ARW follows in a separate adapter milestone.
+- One JPEG or Sony ARW per job; other RAW formats remain outside the current scope.
 - Source checksum, dimensions, orientation, camera/lens/exposure metadata, and embedded profile detection.
 - Explicit ICC conversion to a named high-bit-depth working space.
 - Deterministic histograms, clipping, luminance, saturation, sharpness, aspect, and crop measurements.
@@ -47,6 +47,6 @@ The documented CLI workflow completes on the licensed project fixture; the sourc
 ## Assumptions and unresolved validation
 
 - macOS supplies usable ACEScg and sRGB profiles at known ColorSync paths.
-- A future user-owned ARW is required to evaluate camera development and lens behavior.
+- One private Sony ILCE-7RM5 ARW confirms adapter compatibility and repeatability; a paired in-camera JPEG and trusted manual development are still required for quality evaluation.
 - Real-photo evaluation is required before making quality claims or tuning look defaults aggressively.
 - Public distribution and repository licensing require a separate decision and dependency-notice review.

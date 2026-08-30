@@ -10,7 +10,7 @@ Status: implemented and locally verified on the programmatic JPEG fixture. Deliv
 
 ## Milestone 2 — RAW adapter
 
-Add RawTherapee 5.13 behind the existing working-image boundary. Persist the exact PP3, application version, profile hashes, stderr, and applied-capability report. Acceptance requires a user-owned Sony ARW and comparison with its JPEG; no automated fixture is claimed until permission and provenance exist.
+Status: adapter implemented; compatibility and repeat-pixel determinism verified with one private user-owned Sony ILCE-7RM5 ARW. RawTherapee 5.13 runs behind the existing working-image boundary with isolated settings/cache directories, a committed PP3, 16-bit profiled TIFF output, captured diagnostics, and honest lens-capability reporting. A paired in-camera JPEG and trusted manual development comparison remain pending, so general photographic quality is not yet accepted.
 
 ## Milestone 3 — geometry and crop evaluation
 

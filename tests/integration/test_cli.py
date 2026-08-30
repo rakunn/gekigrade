@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from pytest import MonkeyPatch
 from typer.testing import CliRunner
 
+import gekigrade.cli as cli_module
 from gekigrade.cli import app
 
 runner = CliRunner()
@@ -64,3 +66,21 @@ def test_cli_uses_nonzero_exit_for_invalid_plan(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert "validation" in result.output.lower()
+
+
+def test_cli_inspect_uses_the_format_agnostic_inspector(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    source = tmp_path / "camera.ARW"
+    source.write_bytes(b"II*\x00fixture")
+
+    def inspect_stub(path: Path) -> dict[str, str]:
+        assert path == source
+        return {"format": "ARW", "source_sha256": "a" * 64}
+
+    monkeypatch.setattr(cli_module, "inspect_photo", inspect_stub)
+
+    result = runner.invoke(app, ["inspect", str(source)])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["format"] == "ARW"

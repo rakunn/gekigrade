@@ -1,0 +1,19 @@
+{
+  "applicable_scene_guidance": "Travel, architecture and landscape scenes suited to subdued color separation.",
+  "continuation_color_space": "ACEScct",
+  "default_strength": 0.55,
+  "description": "A softly muted finish with a subtle cool bias in darker values.",
+  "expected_input_color_space": "ACEScct",
+  "id": "muted-cinematic",
+  "known_limitations": "May make skin or low-saturation scenes appear too cool; no film stock is imitated.",
+  "operations": {
+    "black_lift": 0.006,
+    "contrast": 0.03,
+    "highlight_rolloff": 0.04,
+    "saturation": -0.07,
+    "shadow_hue_shift": 0.018,
+    "temperature_mired_shift": -2.0
+  },
+  "strength_range": [0.0, 0.75],
+  "version": "1.0.0"
+}

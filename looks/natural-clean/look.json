@@ -1,0 +1,19 @@
+{
+  "applicable_scene_guidance": "General-purpose correction where neutral color and restrained contrast are preferred.",
+  "continuation_color_space": "ACEScct",
+  "default_strength": 0.5,
+  "description": "A restrained neutral finish with a gentle shoulder and slight color separation.",
+  "expected_input_color_space": "ACEScct",
+  "id": "natural-clean",
+  "known_limitations": "Does not repair mixed lighting or clipped channels.",
+  "operations": {
+    "black_lift": 0.0,
+    "contrast": 0.025,
+    "highlight_rolloff": 0.025,
+    "saturation": 0.015,
+    "shadow_hue_shift": 0.0,
+    "temperature_mired_shift": 0.0
+  },
+  "strength_range": [0.0, 0.8],
+  "version": "1.0.0"
+}

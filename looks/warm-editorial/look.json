@@ -1,0 +1,19 @@
+{
+  "applicable_scene_guidance": "Daylight portraits, travel, food and lifestyle scenes that tolerate gentle warmth.",
+  "continuation_color_space": "ACEScct",
+  "default_strength": 0.6,
+  "description": "A mildly warm editorial finish with lifted blacks and controlled saturation.",
+  "expected_input_color_space": "ACEScct",
+  "id": "warm-editorial",
+  "known_limitations": "Can exaggerate already-warm indoor lighting and is not a substitute for RAW white balance.",
+  "operations": {
+    "black_lift": 0.003,
+    "contrast": 0.035,
+    "highlight_rolloff": 0.035,
+    "saturation": 0.02,
+    "shadow_hue_shift": 0.0,
+    "temperature_mired_shift": 6.0
+  },
+  "strength_range": [0.0, 0.8],
+  "version": "1.0.0"
+}

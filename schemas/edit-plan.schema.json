@@ -1,0 +1,57 @@
+{
+  "$defs": {
+    "CandidateRecipe": {
+      "additionalProperties": false,
+      "properties": {
+        "black_lift": {"maximum": 0.03, "minimum": 0.0, "title": "Black Lift", "type": "number"},
+        "contrast": {"maximum": 0.25, "minimum": -0.25, "title": "Contrast", "type": "number"},
+        "crop_id": {"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "title": "Crop Id", "type": "string"},
+        "description": {"maxLength": 200, "minLength": 1, "title": "Description", "type": "string"},
+        "exposure_ev": {"maximum": 2.0, "minimum": -2.0, "title": "Exposure Ev", "type": "number"},
+        "highlight_rolloff": {"maximum": 0.5, "minimum": 0.0, "title": "Highlight Rolloff", "type": "number"},
+        "id": {"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "title": "Id", "type": "string"},
+        "look": {"$ref": "#/$defs/LookReference"},
+        "rotation_degrees": {"maximum": 5.0, "minimum": -5.0, "title": "Rotation Degrees", "type": "number"},
+        "saturation": {"maximum": 0.25, "minimum": -0.25, "title": "Saturation", "type": "number"},
+        "sharpen": {"maximum": 1.0, "minimum": 0.0, "title": "Sharpen", "type": "number"},
+        "temperature_mired_shift": {"maximum": 30.0, "minimum": -30.0, "title": "Temperature Mired Shift", "type": "number"},
+        "vignette": {"maximum": 0.25, "minimum": 0.0, "title": "Vignette", "type": "number"}
+      },
+      "required": ["id", "description", "rotation_degrees", "exposure_ev", "temperature_mired_shift", "contrast", "black_lift", "highlight_rolloff", "saturation", "vignette", "sharpen", "look", "crop_id"],
+      "title": "CandidateRecipe",
+      "type": "object"
+    },
+    "LookReference": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "title": "Id", "type": "string"},
+        "strength": {"maximum": 1.0, "minimum": 0.0, "title": "Strength", "type": "number"},
+        "version": {"pattern": "^\\d+\\.\\d+\\.\\d+$", "title": "Version", "type": "string"}
+      },
+      "required": ["id", "version", "strength"],
+      "title": "LookReference",
+      "type": "object"
+    }
+  },
+  "$id": "https://gekigrade.local/schemas/edit-plan-1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidates": {
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {"$ref": "#/$defs/CandidateRecipe"},
+        {"$ref": "#/$defs/CandidateRecipe"},
+        {"$ref": "#/$defs/CandidateRecipe"}
+      ],
+      "title": "Candidates",
+      "type": "array"
+    },
+    "schema_version": {"const": "1.0.0", "title": "Schema Version", "type": "string"},
+    "source_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Source Sha256", "type": "string"}
+  },
+  "required": ["schema_version", "source_sha256", "candidates"],
+  "title": "EditPlan",
+  "type": "object"
+}

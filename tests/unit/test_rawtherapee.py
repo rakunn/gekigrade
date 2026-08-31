@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import plistlib
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from gekigrade.adapters.rawtherapee import (
     RawTherapeeError,
@@ -18,28 +20,39 @@ def _sha256(path: Path) -> str:
 
 
 def _write_executable(path: Path, source: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source, encoding="utf-8")
     path.chmod(0o755)
     return path
 
 
+def _write_rawtherapee_app(root: Path, version: str, source: str) -> Path:
+    executable = _write_executable(root / "RawTherapee.app/Contents/MacOS/rawtherapee-cli", source)
+    (executable.parent.parent / "Info.plist").write_bytes(
+        plistlib.dumps({"CFBundleShortVersionString": version})
+    )
+    return executable
+
+
 def test_develop_raw_isolates_state_and_records_the_fixed_invocation(tmp_path: Path) -> None:
     source = tmp_path / "photo.arw"
-    source.write_bytes(b"II*\x00source-pixels")
+    Image.new("I;16", (2, 2), 12345).save(source, format="TIFF")
     before = _sha256(source)
     profile = tmp_path / "neutral.pp3"
     profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
-    executable = _write_executable(
-        tmp_path / "fake-rawtherapee",
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
         """#!/usr/bin/env python3
 import json
 import os
 import pathlib
+import shutil
 import sys
 
 args = sys.argv[1:]
 target = pathlib.Path(args[args.index("-o") + 1])
-target.write_bytes(b"II*\\x00developed-pixels")
+shutil.copyfile(pathlib.Path(args[-1]), target)
 target.with_suffix(".invocation.json").write_text(json.dumps({
     "args": args,
     "settings": os.environ.get("RT_SETTINGS"),
@@ -85,16 +98,17 @@ print("processed deterministically")
     assert report["source_sha256_before"] == before
     assert report["source_sha256_after"] == before
     assert report["executable_sha256"] == _sha256(executable)
-    assert report["tool_version"] is None
+    assert report["tool_version"] == "5.13"
 
 
 def test_develop_raw_surfaces_failure_and_does_not_admit_partial_output(tmp_path: Path) -> None:
     source = tmp_path / "photo.arw"
-    source.write_bytes(b"II*\x00source-pixels")
+    Image.new("I;16", (2, 2), 12345).save(source, format="TIFF")
     profile = tmp_path / "neutral.pp3"
     profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
-    executable = _write_executable(
-        tmp_path / "failing-rawtherapee",
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
         """#!/usr/bin/env python3
 import pathlib
 import sys
@@ -121,6 +135,68 @@ raise SystemExit(7)
     report = json.loads((work / "run.json").read_text(encoding="utf-8"))
     assert report["returncode"] == 7
     assert report["stderr"] == "unsupported camera data"
+
+
+def test_develop_raw_rejects_an_unpinned_rawtherapee_version(tmp_path: Path) -> None:
+    source = tmp_path / "photo.arw"
+    Image.new("I;16", (2, 2), 12345).save(source, format="TIFF")
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.12",
+        """#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+""",
+    )
+
+    with pytest.raises(RawTherapeeError, match=r"requires version 5\.13; found 5\.12"):
+        develop_raw(
+            source,
+            tmp_path / "rawtherapee/developed.tif",
+            work_directory=tmp_path / "rawtherapee",
+            profile=profile,
+            executable=executable,
+        )
+
+    assert not (tmp_path / "rawtherapee").exists()
+
+
+def test_develop_raw_rejects_an_eight_bit_tiff_output(tmp_path: Path) -> None:
+    source = tmp_path / "photo.arw"
+    Image.new("L", (2, 2), 123).save(source, format="TIFF")
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        """#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+""",
+    )
+    work = tmp_path / "rawtherapee"
+    target = work / "developed.tif"
+
+    with pytest.raises(RawTherapeeError, match="16-bit samples"):
+        develop_raw(
+            source,
+            target,
+            work_directory=work,
+            profile=profile,
+            executable=executable,
+        )
+
+    assert not target.exists()
 
 
 def test_lensfun_support_reports_matches_without_claiming_application(tmp_path: Path) -> None:

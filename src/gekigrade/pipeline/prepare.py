@@ -15,6 +15,7 @@ from gekigrade.adapters.rawtherapee import (
     LENSFUN_DATABASE,
     RAWTHERAPEE_CLI,
     RAWTHERAPEE_OUTPUT_PROFILE,
+    RawTherapeeError,
     develop_raw,
     inspect_lensfun_support,
 )
@@ -323,6 +324,8 @@ def prepare_job(
             profile=raw_profile,
             executable=rawtherapee_executable,
         )
+        if result.source_sha256 != source["source_sha256"]:
+            raise RawTherapeeError("source RAW changed after inspection")
         intermediate_profile = _embedded_profile(developed)
         if not raw_output_profile.is_file():
             raise RuntimeError("expected RawTherapee output ICC profile is unavailable")
@@ -374,4 +377,6 @@ def prepare_job(
     write_json(job / "looks.json", {"schema_version": "1.0.0", "looks": looks_as_json()})
     write_json(job / "edit-plan.schema.json", EditPlan.model_json_schema())
     write_json(job / "manifest.json", _artifact_manifest(job, source))
+    if source_format == "ARW" and sha256_file(source_path) != source["source_sha256"]:
+        raise RawTherapeeError("source RAW changed during job preparation")
     return job

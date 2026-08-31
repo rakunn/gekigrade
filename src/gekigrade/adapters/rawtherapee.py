@@ -12,9 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
+from PIL import Image, TiffImagePlugin, UnidentifiedImageError
+
 from gekigrade.domain.jsonio import write_json
 
 RAWTHERAPEE_CLI = Path("/Applications/RawTherapee.app/Contents/MacOS/rawtherapee-cli")
+SUPPORTED_RAWTHERAPEE_VERSION = "5.13"
 DEFAULT_RAW_PROFILE = Path(__file__).parent.parent / "raw_profiles/neutral-v1.pp3"
 LENSFUN_DATABASE = Path(
     "/Applications/RawTherapee.app/Contents/Resources/share/lensfun/mil-sony.xml"
@@ -44,6 +47,7 @@ class LensfunSupport(TypedDict):
 class RawDevelopmentResult:
     output_path: Path
     output_sha256: str
+    source_sha256: str
     profile_path: Path
     profile_sha256: str
     report_path: Path
@@ -134,6 +138,12 @@ def _validate_inputs(
         raise ValueError("RAW development profile must be a regular, non-symlink file")
     if not executable.is_file() or executable.stat().st_mode & 0o111 == 0:
         raise RawTherapeeError("RawTherapee CLI is unavailable; run `geki doctor`")
+    installed_version = _tool_version(executable)
+    if installed_version != SUPPORTED_RAWTHERAPEE_VERSION:
+        found = installed_version or "unknown"
+        raise RawTherapeeError(
+            f"GekiGrade requires version {SUPPORTED_RAWTHERAPEE_VERSION}; found {found}"
+        )
 
     resolved_source = source.resolve(strict=True)
     resolved_profile = profile.resolve(strict=True)
@@ -246,6 +256,18 @@ def develop_raw(
         if stream.read(4) not in {b"II*\x00", b"MM\x00*"}:
             target.unlink(missing_ok=True)
             raise RawTherapeeError("RawTherapee output is not a TIFF")
+    try:
+        with Image.open(target) as image:
+            if not isinstance(image, TiffImagePlugin.TiffImageFile):
+                raise OSError("decoded image is not a TIFF")
+            bits_per_sample = image.tag_v2.get(258)
+    except (OSError, SyntaxError, UnidentifiedImageError) as exc:
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError(f"RawTherapee output TIFF cannot be decoded: {exc}") from exc
+    bits = (bits_per_sample,) if isinstance(bits_per_sample, int) else tuple(bits_per_sample or ())
+    if not bits or any(bit != 16 for bit in bits):
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee output TIFF must contain 16-bit samples")
 
     output_sha256 = _sha256(target)
     report["output_sha256"] = output_sha256
@@ -253,6 +275,7 @@ def develop_raw(
     return RawDevelopmentResult(
         output_path=target,
         output_sha256=output_sha256,
+        source_sha256=before,
         profile_path=copied_profile,
         profile_sha256=profile_sha256,
         report_path=report_path,

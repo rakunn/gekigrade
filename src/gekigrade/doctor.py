@@ -19,6 +19,7 @@ from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
     LENSFUN_DATABASE,
     RAWTHERAPEE_OUTPUT_PROFILE,
+    SUPPORTED_RAWTHERAPEE_VERSION,
 )
 from gekigrade.adapters.tools import ExternalTool, ToolStatus, inspect_tool
 
@@ -159,6 +160,7 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
     ready_for_raw = (
         ready
         and tools["rawtherapee"].available
+        and tools["rawtherapee"].version == SUPPORTED_RAWTHERAPEE_VERSION
         and profiles["raw_development_pp3"]["available"] is True
         and profiles["rawtherapee_output"]["available"] is True
         and profiles["lensfun_database"]["available"] is True

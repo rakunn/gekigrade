@@ -567,6 +567,40 @@ def test_prepare_rejects_an_internal_bundle_symlink_before_creating_job(
     assert not job.exists()
 
 
+@pytest.mark.parametrize("invalid_prerequisite", ["output-profile", "camera", "lensfun"])
+def test_prepare_rejects_invalid_raw_prerequisites_before_creating_job(
+    tmp_path: Path,
+    invalid_prerequisite: str,
+) -> None:
+    source, exiftool, rawtherapee, lensfun = _raw_test_dependencies(tmp_path)
+    if invalid_prerequisite == "output-profile":
+        output_profile = (
+            rawtherapee.parent.parent / "Resources/share/iccprofiles/output/RTv4_Large.icc"
+        )
+        output_profile.write_bytes(b"invalid profile")
+        message = "output ICC profile is invalid"
+    elif invalid_prerequisite == "camera":
+        aliases = (
+            rawtherapee.parent.parent / "Resources/share/dcpprofiles/camera_model_aliases.json"
+        )
+        aliases.unlink()
+        message = "camera resources are not ready"
+    else:
+        (lensfun / "mil-sony.xml").unlink()
+        message = "Lensfun database is not ready"
+    job = tmp_path / "raw-job"
+
+    with pytest.raises(RawTherapeeError, match=message):
+        prepare_job(
+            source,
+            job,
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+
+    assert not job.exists()
+
+
 def test_prepare_rejects_a_modified_shipped_raw_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -897,6 +931,35 @@ def test_prepare_removes_manifest_if_raw_run_report_changes_while_published(
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
         )
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+def test_prepare_binds_source_json_to_the_accepted_raw_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    original_manifest = prepare_module._artifact_manifest
+
+    def forge_source_json_then_build_manifest(
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
+    ) -> dict[str, object]:
+        (job / "source.json").write_text('{"forged": true}\n', encoding="utf-8")
+        return original_manifest(job, metadata, **profile_hashes)
+
+    monkeypatch.setattr(
+        prepare_module,
+        "_artifact_manifest",
+        forge_source_json_then_build_manifest,
+    )
+
+    with pytest.raises(RawTherapeeError, match=r"source\.json changed while publishing"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+
     assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
@@ -1256,11 +1319,13 @@ def test_prepare_rejects_a_working_tiff_changed_during_preview(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    job = tmp_path / "raw-job"
 
     def make_preview_then_change_working(
-        working: Path, preview: Path, *, executable: Path
+        snapshot: Path, preview: Path, *, executable: Path
     ) -> ProcessorIdentity:
-        identity = real_make_preview(working, preview, executable=executable)
+        identity = real_make_preview(snapshot, preview, executable=executable)
+        working = job / "intermediate/working.tif"
         with working.open("ab") as stream:
             stream.write(b"changed during preview")
         return identity
@@ -1270,12 +1335,69 @@ def test_prepare_rejects_a_working_tiff_changed_during_preview(
     with pytest.raises(RuntimeError, match="working TIFF changed during preview generation"):
         prepare_job(
             source,
-            tmp_path / "raw-job",
+            job,
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
         )
     assert not (tmp_path / "raw-job/preview.jpg").exists()
     assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+def test_prepare_previews_an_identity_bound_working_tiff_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    baseline = tmp_path / "baseline-job"
+    raced = tmp_path / "raced-job"
+    prepare_job(
+        source,
+        baseline,
+        exiftool_executable=exiftool,
+        rawtherapee_executable=rawtherapee,
+    )
+    expected_preview_sha256 = _sha256(baseline / "preview.jpg")
+    replacement = tmp_path / "replacement-working.tif"
+    subprocess.run(
+        [
+            "/opt/homebrew/bin/magick",
+            str(baseline / "intermediate/working.tif"),
+            "-evaluate",
+            "multiply",
+            "0.5",
+            "-depth",
+            "16",
+            "-define",
+            "tiff:bits-per-sample=16",
+            f"TIFF:{replacement}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    def preview_while_working_path_is_replaced(
+        snapshot: Path, preview: Path, *, executable: Path
+    ) -> ProcessorIdentity:
+        working = raced / "intermediate/working.tif"
+        backup = working.with_suffix(".backup")
+        working.rename(backup)
+        try:
+            shutil.copyfile(replacement, working)
+            return real_make_preview(snapshot, preview, executable=executable)
+        finally:
+            working.unlink(missing_ok=True)
+            backup.rename(working)
+
+    monkeypatch.setattr(prepare_module, "make_preview", preview_while_working_path_is_replaced)
+
+    prepare_job(
+        source,
+        raced,
+        exiftool_executable=exiftool,
+        rawtherapee_executable=rawtherapee,
+    )
+
+    assert _sha256(raced / "preview.jpg") == expected_preview_sha256
 
 
 def test_prepare_rejects_jpeg_working_dimensions_that_differ_from_source(

@@ -16,7 +16,7 @@ Versions below are the verified local versions on 2026-08-30. Homebrew packages 
 
 Primary references: [ExifTool source and license](https://github.com/exiftool/exiftool), [ImageMagick color management](https://imagemagick.org/color-management/), [ImageMagick license](https://imagemagick.org/license/), [OpenImageIO documentation](https://openimageio.readthedocs.io/), [OpenColorIO ACES CG config](https://opencolorio.readthedocs.io/en/v2.5.2/configurations/aces_cg.html).
 
-ImageMagick output isolation is part of the adapter contract: commands write into a uniquely created private directory, the resulting regular file is fingerprinted, and only then is it atomically published and revalidated at the intended job path. This avoids following a destination symlink that appears after job setup.
+ImageMagick output isolation is part of the adapter contract: commands write into a uniquely created private directory, the resulting regular file is fingerprinted, and only then is it atomically published and revalidated at the intended job path. This avoids following a destination symlink that appears after job setup. Preview input is likewise isolated through a transient, read-only snapshot bound to the accepted working-TIFF hash.
 
 ## Selected for Sony ARW development
 

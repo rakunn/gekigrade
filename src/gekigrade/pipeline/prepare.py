@@ -26,6 +26,7 @@ from gekigrade.adapters.rawtherapee import (
     SUPPORTED_RAWTHERAPEE_VERSION,
     CameraInputProfile,
     CameraResourceStatus,
+    LensfunSupport,
     RawTherapeeError,
     ResourceStatus,
     develop_raw,
@@ -49,7 +50,7 @@ from gekigrade.doctor import (
     sha256_file,
 )
 from gekigrade.doctor import EXIFTOOL_ENVIRONMENT as DOCTOR_EXIFTOOL_ENVIRONMENT
-from gekigrade.domain.jsonio import write_json
+from gekigrade.domain.jsonio import canonical_json_bytes, write_json
 from gekigrade.domain.models import EditPlan
 from gekigrade.domain.paths import create_job_directory
 from gekigrade.geometry.crops import generate_crop_candidates
@@ -662,6 +663,19 @@ def prepare_job(
         raise ValueError("unsupported source format; expected JPEG or Sony ARW")
     source_format = source["format"]
     inspected_oriented_dimensions = dict(source["oriented_dimensions"])
+    raw_profile_artifact: tuple[Path, str] | None = None
+    raw_output_profile_artifact: tuple[Path, str] | None = None
+    raw_output_profile_status: dict[str, str | bool | None] | None = None
+    raw_camera_input_profile: CameraInputProfile | None = None
+    raw_camera_resources_status: CameraResourceStatus | None = None
+    raw_lensfun_database_status: ResourceStatus | None = None
+    raw_lensfun_database_path: Path | None = None
+    raw_output_profile: Path | None = None
+    expected_intermediate_profile_sha256: str | None = None
+    lens_correction: LensfunSupport | None = None
+    developed_artifact: tuple[Path, str] | None = None
+    raw_run_report_artifact: tuple[Path, str] | None = None
+    rawtherapee_tool_status: ToolStatus | None = None
     if source_format == "ARW" and path_has_symlink(rawtherapee_executable):
         raise RawTherapeeError("RawTherapee CLI has a symlinked path component")
     if source_format == "ARW" and rawtherapee_bundle_has_symlink(rawtherapee_executable):
@@ -672,31 +686,8 @@ def prepare_job(
         or sha256_file(DEFAULT_RAW_PROFILE) != EXPECTED_DEFAULT_RAW_PROFILE_SHA256
     ):
         raise RawTherapeeError("shipped RAW development profile does not match its pinned identity")
-    job = create_job_directory(source_path, output_path)
-    working = job / "intermediate/working.tif"
-    preview = job / "preview.jpg"
-    raw_profile_artifact: tuple[Path, str] | None = None
-    raw_output_profile_artifact: tuple[Path, str] | None = None
-    raw_output_profile_status: dict[str, str | bool | None] | None = None
-    raw_camera_input_profile: CameraInputProfile | None = None
-    raw_camera_resources_status: CameraResourceStatus | None = None
-    raw_lensfun_database_status: ResourceStatus | None = None
-    raw_lensfun_database_path: Path | None = None
-    developed_artifact: tuple[Path, str] | None = None
-    raw_run_report_artifact: tuple[Path, str] | None = None
-    rawtherapee_tool_status: ToolStatus | None = None
-    if source_format == "JPEG":
-        normalization_tool = normalize_jpeg(
-            source_path.resolve(),
-            working,
-            has_profile=embedded_profile is not None,
-            executable=imagemagick_executable,
-        )
-    else:
-        raw_work = job / "intermediate/rawtherapee"
-        developed = raw_work / "developed.tif"
-        lensfun_database = lensfun_database_for_executable(rawtherapee_executable)
-        raw_lensfun_database_path = lensfun_database
+    if source_format == "ARW":
+        raw_lensfun_database_path = lensfun_database_for_executable(rawtherapee_executable)
         raw_output_profile = rawtherapee_output_profile_for_executable(rawtherapee_executable)
         raw_output_profile_status = icc_profile_status(raw_output_profile)
         if (
@@ -713,17 +704,36 @@ def prepare_job(
         raw_camera_resources_status = inspect_camera_resources(executable=rawtherapee_executable)
         if not raw_camera_resources_status["ready"]:
             raise RawTherapeeError("RawTherapee camera resources are not ready")
-        raw_lensfun_database_status = inspect_lensfun_database(database=lensfun_database)
+        raw_lensfun_database_status = inspect_lensfun_database(database=raw_lensfun_database_path)
         if not raw_lensfun_database_status["ready"]:
             raise RawTherapeeError("Lensfun database is not ready")
         raw_camera_input_profile = inspect_camera_input_profile(
             source["capture_metadata"], executable=rawtherapee_executable
         )
         lens_correction = inspect_lensfun_support(
-            source["capture_metadata"], database=lensfun_database
+            source["capture_metadata"], database=raw_lensfun_database_path
         )
         if lens_correction["database_sha256"] is None:
             raise RawTherapeeError("Lensfun database cannot be fingerprinted")
+    job = create_job_directory(source_path, output_path)
+    working = job / "intermediate/working.tif"
+    preview = job / "preview.jpg"
+    if source_format == "JPEG":
+        normalization_tool = normalize_jpeg(
+            source_path.resolve(),
+            working,
+            has_profile=embedded_profile is not None,
+            executable=imagemagick_executable,
+        )
+    else:
+        raw_work = job / "intermediate/rawtherapee"
+        developed = raw_work / "developed.tif"
+        assert raw_output_profile is not None
+        assert expected_intermediate_profile_sha256 is not None
+        assert raw_camera_resources_status is not None
+        assert raw_lensfun_database_status is not None
+        assert raw_lensfun_database_path is not None
+        assert lens_correction is not None
         result = develop_raw(
             source_path,
             developed,
@@ -760,7 +770,7 @@ def prepare_job(
         ):
             raise RawTherapeeError("RawTherapee camera input resources changed during development")
         if (
-            inspect_lensfun_support(source["capture_metadata"], database=lensfun_database)
+            inspect_lensfun_support(source["capture_metadata"], database=raw_lensfun_database_path)
             != lens_correction
         ):
             raise RawTherapeeError("Lensfun database changed during RAW development")
@@ -843,7 +853,18 @@ def prepare_job(
         source["raw_development"]["working_profile_sha256"] = working_profile_sha256
     if not _artifact_matches(working, working_sha256):
         raise RuntimeError("working TIFF changed before preview generation")
-    preview_tool = make_preview(working, preview, executable=imagemagick_executable)
+    with tempfile.TemporaryDirectory(prefix="gekigrade-preview-") as directory:
+        preview_snapshot = Path(directory) / "working-snapshot.tif"
+        _copy_identity_bound_snapshot(
+            working,
+            preview_snapshot,
+            working_sha256,
+            label="working TIFF",
+        )
+        preview_tool = make_preview(preview_snapshot, preview, executable=imagemagick_executable)
+        if not _artifact_matches(preview_snapshot, working_sha256):
+            preview.unlink(missing_ok=True)
+            raise RuntimeError("working TIFF snapshot changed during preview generation")
     if not _artifact_matches(working, working_sha256):
         preview.unlink(missing_ok=True)
         raise RuntimeError("working TIFF changed during preview generation")
@@ -870,7 +891,9 @@ def prepare_job(
     candidates = generate_crop_candidates(
         source["oriented_dimensions"]["width"], source["oriented_dimensions"]["height"]
     )
-    write_json(job / "source.json", source)
+    source_json_path = job / "source.json"
+    source_json_sha256 = hashlib.sha256(canonical_json_bytes(source)).hexdigest()
+    write_json(source_json_path, source)
     write_json(job / "analysis.json", analysis)
     write_json(job / "crops/candidates.json", {"schema_version": "1.0.0", "candidates": candidates})
     _contact_sheet(preview, candidates, job / "crops/contact-sheet.jpg")
@@ -883,6 +906,10 @@ def prepare_job(
         raise RuntimeError(
             "prepared working or preview artifact changed before manifest publication"
         )
+    if not _artifact_matches(source_json_path, source_json_sha256):
+        if source_format == "ARW":
+            raise RawTherapeeError("source.json changed before manifest publication")
+        raise RuntimeError("source.json changed before manifest publication")
     if source_format == "ARW" and not _raw_source_matches(source_path, source["source_sha256"]):
         raise RawTherapeeError("source RAW changed during job preparation")
     if raw_profile_artifact is not None and not _artifact_matches(*raw_profile_artifact):
@@ -938,6 +965,10 @@ def prepare_job(
             raise RuntimeError(
                 "prepared working or preview artifact changed during manifest publication"
             )
+        if not _artifact_matches(source_json_path, source_json_sha256):
+            if source_format == "ARW":
+                raise RawTherapeeError("source.json changed while publishing the manifest")
+            raise RuntimeError("source.json changed while publishing the manifest")
         if not _artifact_matches(ACESCG_PROFILE, working_profile_sha256) or not _artifact_matches(
             SRGB_PROFILE, output_profile_sha256
         ):

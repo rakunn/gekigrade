@@ -444,6 +444,46 @@ def test_prepare_manifest_uses_the_selected_rawtherapee_output_profile_status(
     }
 
 
+@pytest.mark.parametrize("changed_item", ["executable-mode", "plist-version"])
+def test_prepare_manifest_keeps_the_accepted_rawtherapee_tool_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_item: str,
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    original_manifest = prepare_module._artifact_manifest
+
+    def change_selected_tool_then_build_manifest(
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
+    ) -> dict[str, object]:
+        if changed_item == "executable-mode":
+            rawtherapee.chmod(0o644)
+        else:
+            (rawtherapee.parent.parent / "Info.plist").write_bytes(
+                plistlib.dumps({"CFBundleShortVersionString": "9.9"})
+            )
+        return original_manifest(job, metadata, **profile_hashes)
+
+    monkeypatch.setattr(
+        prepare_module,
+        "_artifact_manifest",
+        change_selected_tool_then_build_manifest,
+    )
+
+    job = prepare_job(
+        source,
+        tmp_path / "raw-job",
+        exiftool_executable=exiftool,
+        rawtherapee_executable=rawtherapee,
+    )
+
+    manifest = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["tools"]["tools"]["rawtherapee"]["available"] is True
+    assert manifest["tools"]["tools"]["rawtherapee"]["version"] == "5.13"
+    assert manifest["tools"]["ready_for_raw"] is True
+    assert manifest["tools"]["raw_status"] == "adapter-ready"
+
+
 def test_prepare_manifest_uses_the_selected_exiftool_and_imagemagick(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

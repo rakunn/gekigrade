@@ -23,6 +23,7 @@ from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
     EXPECTED_DEFAULT_RAW_PROFILE_SHA256,
     RAWTHERAPEE_CLI,
+    SUPPORTED_RAWTHERAPEE_VERSION,
     CameraInputProfile,
     CameraResourceStatus,
     RawTherapeeError,
@@ -37,6 +38,7 @@ from gekigrade.adapters.rawtherapee import (
     rawtherapee_bundle_has_symlink,
     rawtherapee_output_profile_for_executable,
 )
+from gekigrade.adapters.tools import ToolStatus
 from gekigrade.analysis.metrics import analyze_srgb
 from gekigrade.doctor import (
     ACESCG_PROFILE,
@@ -598,6 +600,7 @@ def _artifact_manifest(
     raw_camera_resources_status: CameraResourceStatus | None = None,
     raw_lensfun_database_status: ResourceStatus | None = None,
     rawtherapee_executable: Path | None = None,
+    rawtherapee_tool_status: ToolStatus | None = None,
 ) -> dict[str, Any]:
     doctor = build_doctor_report(
         run_color_probe=False,
@@ -607,6 +610,7 @@ def _artifact_manifest(
         raw_output_profile_status=raw_output_profile_status,
         raw_camera_resources_status=raw_camera_resources_status,
         raw_lensfun_database_status=raw_lensfun_database_status,
+        rawtherapee_tool_status=rawtherapee_tool_status,
     )
     doctor["profiles"]["acescg"] = {
         "available": True,
@@ -680,6 +684,7 @@ def prepare_job(
     raw_lensfun_database_path: Path | None = None
     developed_artifact: tuple[Path, str] | None = None
     raw_run_report_artifact: tuple[Path, str] | None = None
+    rawtherapee_tool_status: ToolStatus | None = None
     if source_format == "JPEG":
         normalization_tool = normalize_jpeg(
             source_path.resolve(),
@@ -733,6 +738,13 @@ def prepare_job(
         )
         developed_artifact = (developed, result.output_sha256)
         raw_run_report_artifact = (result.report_path, result.report_sha256)
+        rawtherapee_tool_status = ToolStatus(
+            name="rawtherapee",
+            available=True,
+            path=str(rawtherapee_executable.absolute()),
+            version=SUPPORTED_RAWTHERAPEE_VERSION,
+            install_hint="Install with: brew install --cask rawtherapee",
+        )
         if result.profile_sha256 != EXPECTED_DEFAULT_RAW_PROFILE_SHA256 or not _artifact_matches(
             result.profile_path, result.profile_sha256
         ):
@@ -916,6 +928,7 @@ def prepare_job(
             raw_camera_resources_status=raw_camera_resources_status,
             raw_lensfun_database_status=raw_lensfun_database_status,
             rawtherapee_executable=(rawtherapee_executable if source_format == "ARW" else None),
+            rawtherapee_tool_status=rawtherapee_tool_status,
         ),
     )
     try:

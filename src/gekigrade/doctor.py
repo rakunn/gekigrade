@@ -230,6 +230,7 @@ def build_doctor_report(
     raw_output_profile_status: dict[str, str | bool | None] | None = None,
     raw_camera_resources_status: CameraResourceStatus | None = None,
     raw_lensfun_database_status: ResourceStatus | None = None,
+    rawtherapee_tool_status: ToolStatus | None = None,
 ) -> dict[str, Any]:
     selected_exiftool = exiftool_executable or EXIFTOOL_CLI
     selected_imagemagick = imagemagick_executable or IMAGEMAGICK_CLI
@@ -259,8 +260,10 @@ def build_doctor_report(
             ),
             environment=MAGICK_ENVIRONMENT,
         ),
-        "rawtherapee": _rawtherapee_status(
-            executable=selected_rawtherapee, plist=rawtherapee_plist
+        "rawtherapee": (
+            rawtherapee_tool_status
+            if rawtherapee_tool_status is not None
+            else _rawtherapee_status(executable=selected_rawtherapee, plist=rawtherapee_plist)
         ),
     }
     camera_resources = (

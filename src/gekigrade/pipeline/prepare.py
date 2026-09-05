@@ -350,13 +350,21 @@ def prepare_job(
             != lens_correction
         ):
             raise RawTherapeeError("Lensfun database changed during RAW development")
+        if sha256_file(developed) != result.output_sha256:
+            raise RawTherapeeError("developed TIFF changed before profile inspection")
         intermediate_profile = _embedded_profile(developed)
         if not raw_output_profile.is_file():
             raise RuntimeError("expected RawTherapee output ICC profile is unavailable")
         expected_intermediate_profile_sha256 = sha256_file(raw_output_profile)
         if intermediate_profile["sha256"] != expected_intermediate_profile_sha256:
             raise RuntimeError("developed TIFF ICC profile does not match the expected profile")
+        normalization_input_sha256 = sha256_file(developed)
+        if normalization_input_sha256 != result.output_sha256:
+            raise RawTherapeeError("developed TIFF changed before normalization")
         normalize_profiled_tiff(developed, working)
+        if sha256_file(developed) != normalization_input_sha256:
+            working.unlink(missing_ok=True)
+            raise RawTherapeeError("developed TIFF changed during normalization")
         with Image.open(working) as normalized:
             source["oriented_dimensions"] = {
                 "width": normalized.width,
@@ -399,7 +407,11 @@ def prepare_job(
     write_json(job / "plans/example-plan.json", _example_plan(source["source_sha256"]))
     write_json(job / "looks.json", {"schema_version": "1.0.0", "looks": looks_as_json()})
     write_json(job / "edit-plan.schema.json", EditPlan.model_json_schema())
-    write_json(job / "manifest.json", _artifact_manifest(job, source))
     if source_format == "ARW" and sha256_file(source_path) != source["source_sha256"]:
         raise RawTherapeeError("source RAW changed during job preparation")
+    manifest_path = job / "manifest.json"
+    write_json(manifest_path, _artifact_manifest(job, source))
+    if source_format == "ARW" and sha256_file(source_path) != source["source_sha256"]:
+        manifest_path.unlink(missing_ok=True)
+        raise RawTherapeeError("source RAW changed while publishing the job manifest")
     return job

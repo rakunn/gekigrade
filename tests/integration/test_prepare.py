@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import plistlib
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from PIL import Image
 
 import gekigrade.pipeline.prepare as prepare_module
 from gekigrade.adapters.imagemagick import make_preview as real_make_preview
+from gekigrade.adapters.imagemagick import normalize_profiled_tiff as real_normalize_profiled_tiff
 from gekigrade.adapters.rawtherapee import RawTherapeeError
 from gekigrade.domain.models import EditPlan
 from gekigrade.domain.paths import create_job_directory as real_create_job_directory
@@ -302,6 +304,35 @@ def test_prepare_rechecks_the_raw_source_before_success(
             raw_profile=profile,
             raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
         )
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+def test_prepare_removes_a_manifest_if_the_raw_changes_while_it_is_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, profile, _ = _raw_test_dependencies(tmp_path)
+    original_manifest = prepare_module._artifact_manifest
+
+    def build_manifest_then_change_source(
+        job: Path, metadata: dict[str, object]
+    ) -> dict[str, object]:
+        manifest = original_manifest(job, metadata)
+        with source.open("ab") as stream:
+            stream.write(b"changed-while-publishing-manifest")
+        return manifest
+
+    monkeypatch.setattr(prepare_module, "_artifact_manifest", build_manifest_then_change_source)
+
+    with pytest.raises(RawTherapeeError, match="changed while publishing"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+            raw_profile=profile,
+            raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
+        )
+    assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
 def test_prepare_rejects_a_lensfun_database_changed_during_development(tmp_path: Path) -> None:
@@ -322,6 +353,34 @@ with pathlib.Path({str(lensfun_file)!r}).open("a", encoding="utf-8") as stream:
     )
 
     with pytest.raises(RawTherapeeError, match="Lensfun database changed"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+            raw_profile=profile,
+            raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
+        )
+
+
+def test_prepare_rejects_a_developed_tiff_replaced_during_normalization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, profile, _ = _raw_test_dependencies(tmp_path)
+    replacement = tmp_path / "replacement.tif"
+    Image.new("RGB", (180, 120), (8, 24, 48)).save(
+        replacement,
+        format="TIFF",
+        icc_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc").read_bytes(),
+    )
+
+    def replace_then_normalize(developed: Path, working: Path) -> None:
+        shutil.copyfile(replacement, developed)
+        real_normalize_profiled_tiff(developed, working)
+
+    monkeypatch.setattr(prepare_module, "normalize_profiled_tiff", replace_then_normalize)
+
+    with pytest.raises(RawTherapeeError, match="developed TIFF changed"):
         prepare_job(
             source,
             tmp_path / "raw-job",

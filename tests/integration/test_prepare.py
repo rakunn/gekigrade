@@ -19,7 +19,7 @@ from gekigrade.adapters.imagemagick import ProcessorIdentity
 from gekigrade.adapters.imagemagick import make_preview as real_make_preview
 from gekigrade.adapters.imagemagick import normalize_profiled_tiff as real_normalize_profiled_tiff
 from gekigrade.adapters.rawtherapee import DEFAULT_RAW_PROFILE, RawTherapeeError
-from gekigrade.doctor import ACESCG_PROFILE
+from gekigrade.doctor import ACESCG_PROFILE, SRGB_PROFILE
 from gekigrade.domain.models import EditPlan
 from gekigrade.domain.paths import create_job_directory as real_create_job_directory
 from gekigrade.pipeline.prepare import inspect_photo, prepare_job
@@ -557,6 +557,23 @@ def test_prepare_rejects_a_working_tiff_changed_during_preview(
     assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
+def test_prepare_rejects_jpeg_working_dimensions_that_differ_from_source(
+    tagged_oriented_jpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_validate = prepare_module._validate_working_tiff
+
+    def report_wrong_dimensions(working: Path) -> tuple[dict[str, int], str]:
+        _, working_sha256 = real_validate(working)
+        return {"width": 200, "height": 200}, working_sha256
+
+    monkeypatch.setattr(prepare_module, "_validate_working_tiff", report_wrong_dimensions)
+
+    with pytest.raises(RuntimeError, match="working TIFF dimensions do not match"):
+        prepare_job(tagged_oriented_jpeg, tmp_path / "jpeg-job")
+    assert not (tmp_path / "jpeg-job/preview.jpg").exists()
+    assert not (tmp_path / "jpeg-job/manifest.json").exists()
+
+
 def test_prepare_binds_the_working_hash_to_the_validated_tiff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -583,6 +600,33 @@ def test_prepare_binds_the_working_hash_to_the_validated_tiff(
         )
     assert not (tmp_path / "raw-job/preview.jpg").exists()
     assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+def test_prepare_rejects_a_preview_with_unexpected_dimensions(
+    tagged_oriented_jpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def write_wrong_sized_preview(
+        working: Path, preview: Path, *, executable: Path
+    ) -> ProcessorIdentity:
+        del working, executable
+        Image.new("RGB", (100, 100), (32, 64, 96)).save(
+            preview,
+            format="JPEG",
+            icc_profile=SRGB_PROFILE.read_bytes(),
+        )
+        return {
+            "name": "ImageMagick",
+            "path": "/test/magick",
+            "version": "test",
+            "executable_sha256": "a" * 64,
+        }
+
+    monkeypatch.setattr(prepare_module, "make_preview", write_wrong_sized_preview)
+
+    with pytest.raises(RuntimeError, match="preview JPEG dimensions do not match"):
+        prepare_job(tagged_oriented_jpeg, tmp_path / "jpeg-job")
+    assert not (tmp_path / "jpeg-job/preview.jpg").exists()
+    assert not (tmp_path / "jpeg-job/manifest.json").exists()
 
 
 def test_prepare_rejects_a_preview_without_the_expected_srgb_profile(

@@ -15,6 +15,7 @@ from gekigrade.adapters.imagemagick import (
     make_preview,
     normalize_jpeg,
     normalize_profiled_tiff,
+    preview_dimensions,
 )
 from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
@@ -313,7 +314,7 @@ def _validate_working_tiff(path: Path) -> tuple[dict[str, int], str]:
 
 
 def _load_validated_srgb(
-    path: Path,
+    path: Path, *, expected_dimensions: tuple[int, int]
 ) -> tuple[np.ndarray[Any, np.dtype[np.float32]], str]:
     if path.is_symlink() or not path.is_file():
         raise RuntimeError("preview must be a regular, non-symlink JPEG")
@@ -324,6 +325,13 @@ def _load_validated_srgb(
                 raise OSError("decoded preview is not a JPEG")
             if image.mode != "RGB" or image.getbands() != ("R", "G", "B"):
                 raise OSError("decoded preview is not three-channel RGB")
+            if image.size != expected_dimensions:
+                path.unlink(missing_ok=True)
+                raise RuntimeError(
+                    "preview JPEG dimensions do not match the requested resize: "
+                    f"expected {expected_dimensions[0]}x{expected_dimensions[1]}, "
+                    f"got {image.width}x{image.height}"
+                )
             profile = image.info.get("icc_profile")
             image.load()
             pixels = np.asarray(image, dtype=np.float32) / np.float32(255.0)
@@ -536,6 +544,9 @@ def prepare_job(
             "lens_correction": lens_correction,
         }
     working_dimensions, working_sha256 = _validate_working_tiff(working)
+    if source_format == "JPEG" and working_dimensions != source["oriented_dimensions"]:
+        working.unlink(missing_ok=True)
+        raise RuntimeError("JPEG working TIFF dimensions do not match the oriented source")
     if source_format == "ARW":
         source["oriented_dimensions"] = working_dimensions
     if not _artifact_matches(working, working_sha256):
@@ -548,7 +559,12 @@ def prepare_job(
         "normalization": normalization_tool,
         "preview": preview_tool,
     }
-    pixels, preview_sha256 = _load_validated_srgb(preview)
+    expected_preview_dimensions = preview_dimensions(
+        working_dimensions["width"], working_dimensions["height"]
+    )
+    pixels, preview_sha256 = _load_validated_srgb(
+        preview, expected_dimensions=expected_preview_dimensions
+    )
     source["prepared_artifacts"] = {
         "working_tiff_sha256": working_sha256,
         "preview_jpeg_sha256": preview_sha256,

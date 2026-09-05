@@ -5,13 +5,27 @@ from pathlib import Path
 
 import pytest
 
-from gekigrade.adapters.imagemagick import ProcessorError, run_magick
+from gekigrade.adapters.imagemagick import ProcessorError, preview_dimensions, run_magick
 
 
 def _write_executable(path: Path, source: str) -> Path:
     path.write_text(source, encoding="utf-8")
     path.chmod(0o755)
     return path
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "expected"),
+    [
+        (240, 320, (240, 320)),
+        (8685, 4883, (2048, 1151)),
+        (4883, 8685, (1151, 2048)),
+    ],
+)
+def test_preview_dimensions_match_imagemagick_bounding_geometry(
+    width: int, height: int, expected: tuple[int, int]
+) -> None:
+    assert preview_dimensions(width, height) == expected
 
 
 def test_run_magick_returns_the_exact_executable_identity(tmp_path: Path) -> None:

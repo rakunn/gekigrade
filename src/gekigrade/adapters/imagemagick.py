@@ -8,6 +8,7 @@ from typing import TypedDict
 from gekigrade.doctor import ACESCG_PROFILE, IMAGEMAGICK_CLI, SRGB_PROFILE
 
 MAGICK = IMAGEMAGICK_CLI
+PREVIEW_MAX_EDGE = 2048
 
 
 class ProcessorError(RuntimeError):
@@ -19,6 +20,21 @@ class ProcessorIdentity(TypedDict):
     path: str
     version: str
     executable_sha256: str
+
+
+def preview_dimensions(
+    width: int, height: int, *, max_edge: int = PREVIEW_MAX_EDGE
+) -> tuple[int, int]:
+    if width <= 0 or height <= 0 or max_edge <= 0:
+        raise ValueError("preview dimensions and maximum edge must be positive")
+    longest_edge = max(width, height)
+    if longest_edge <= max_edge:
+        return width, height
+
+    def scaled(value: int) -> int:
+        return max(1, (value * max_edge + longest_edge // 2) // longest_edge)
+
+    return scaled(width), scaled(height)
 
 
 def _sha256(path: Path) -> str:
@@ -135,7 +151,11 @@ def normalize_profiled_tiff(
 
 
 def make_preview(
-    source: Path, target: Path, *, max_edge: int = 2048, executable: Path = MAGICK
+    source: Path,
+    target: Path,
+    *,
+    max_edge: int = PREVIEW_MAX_EDGE,
+    executable: Path = MAGICK,
 ) -> ProcessorIdentity:
     return run_magick(
         [

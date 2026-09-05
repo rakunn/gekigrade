@@ -5,7 +5,7 @@
 - Source SHA-256 is unchanged after success and every reproduced failure.
 - A structurally and semantically valid recipe is required before rendering.
 - Unknown operations, fields, looks, versions, crops, and out-of-range values are rejected.
-- Orientation and normalized crop transforms produce expected dimensions at preview and full resolution.
+- Orientation and normalized crop transforms produce expected dimensions at preview and full resolution. JPEG working dimensions must equal the EXIF-oriented source, and preview dimensions must exactly match the aspect-preserving 2048-pixel maximum-edge transform.
 - Working and output profiles are present, described, hashed, and independently verified.
 - NaN/Inf, malformed images, unprofiled CMYK, unsafe paths, missing tools, timeouts, and non-zero subprocess exits are surfaced.
 - Repeated renders under the same fingerprint have identical decoded-pixel hashes.

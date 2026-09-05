@@ -57,7 +57,9 @@ def _write_rawtherapee_app(root: Path, source: str) -> Path:
     return executable
 
 
-def _raw_test_dependencies(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+def _raw_test_dependencies(
+    tmp_path: Path, *, orientation: int = 1
+) -> tuple[Path, Path, Path, Path]:
     source = tmp_path / "camera.ARW"
     srgb_profile = Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc")
     unprofiled_source = tmp_path / "camera-unprofiled.tif"
@@ -84,9 +86,7 @@ def _raw_test_dependencies(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         capture_output=True,
         text=True,
     )
-    exiftool = _write_executable(
-        tmp_path / "fake-exiftool",
-        """#!/usr/bin/env python3
+    exiftool_source = """#!/usr/bin/env python3
 import json
 import sys
 
@@ -111,7 +111,10 @@ print(json.dumps([{
     "FocalLength": 24.0,
     "DateTimeOriginal": "2026:08:27 17:50:37"
 }]))
-""",
+""".replace('"Orientation": 1', f'"Orientation": {orientation}')
+    exiftool = _write_executable(
+        tmp_path / "fake-exiftool",
+        exiftool_source,
     )
     rawtherapee = _write_rawtherapee_app(
         tmp_path,
@@ -294,6 +297,7 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     }
     development = metadata["raw_development"]
     assert development["engine"] == "RawTherapee"
+    assert development["inspected_oriented_dimensions"] == {"width": 180, "height": 120}
     assert development["profile_sha256"] == _sha256(DEFAULT_RAW_PROFILE)
     camera_input = development["camera_input_profile"]
     expected_dcp = rawtherapee.parent.parent / "Resources/share/dcpprofiles/SONY ILCE-TEST.dcp"
@@ -343,6 +347,22 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
 def test_prepare_does_not_expose_a_raw_profile_override() -> None:
     assert "raw_profile" not in inspect.signature(prepare_job).parameters
     assert "raw_output_profile" not in inspect.signature(prepare_job).parameters
+
+
+def test_prepare_rejects_unrotated_raw_output_for_rotated_exif_orientation(
+    tmp_path: Path,
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path, orientation=6)
+
+    with pytest.raises(RuntimeError, match="RAW working TIFF orientation does not match"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/preview.jpg").exists()
+    assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
 def test_prepare_rejects_a_raw_source_changed_after_inspection(

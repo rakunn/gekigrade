@@ -356,6 +356,14 @@ def _artifact_matches(path: Path, expected_sha256: str) -> bool:
         return False
 
 
+def _orientation_axis_matches(expected: dict[str, int], actual: dict[str, int]) -> bool:
+    expected_axis = (expected["width"] > expected["height"]) - (
+        expected["width"] < expected["height"]
+    )
+    actual_axis = (actual["width"] > actual["height"]) - (actual["width"] < actual["height"])
+    return expected_axis == 0 or expected_axis == actual_axis
+
+
 def _contact_sheet(preview_path: Path, candidates: list[dict[str, Any]], target: Path) -> None:
     with Image.open(preview_path) as opened:
         image = opened.convert("RGB")
@@ -453,6 +461,7 @@ def prepare_job(
     else:
         raise ValueError("unsupported source format; expected JPEG or Sony ARW")
     source_format = source["format"]
+    inspected_oriented_dimensions = dict(source["oriented_dimensions"])
     job = create_job_directory(source_path, output_path)
     working = job / "intermediate/working.tif"
     preview = job / "preview.jpg"
@@ -527,6 +536,7 @@ def prepare_job(
             "camera_input_profile": camera_input_profile,
             "run_report_path": str(result.report_path.relative_to(job)),
             "developed_tiff_sha256": result.output_sha256,
+            "inspected_oriented_dimensions": inspected_oriented_dimensions,
             "intermediate_profile": intermediate_profile,
             "expected_intermediate_profile_path": str(raw_output_profile),
             "expected_intermediate_profile_sha256": expected_intermediate_profile_sha256,
@@ -548,6 +558,11 @@ def prepare_job(
         working.unlink(missing_ok=True)
         raise RuntimeError("JPEG working TIFF dimensions do not match the oriented source")
     if source_format == "ARW":
+        if not _orientation_axis_matches(inspected_oriented_dimensions, working_dimensions):
+            working.unlink(missing_ok=True)
+            raise RuntimeError(
+                "RAW working TIFF orientation does not match the inspected EXIF orientation"
+            )
         source["oriented_dimensions"] = working_dimensions
     if not _artifact_matches(working, working_sha256):
         raise RuntimeError("working TIFF changed before preview generation")

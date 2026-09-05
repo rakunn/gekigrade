@@ -47,7 +47,12 @@ def _write_uint16_tiff(path: Path, *, channels: int = 3, value: int = 32768) -> 
     assert buffer.write(str(path), fileformat="tiff"), buffer.geterror()
 
 
-def test_develop_raw_isolates_state_and_records_the_fixed_invocation(tmp_path: Path) -> None:
+def test_develop_raw_isolates_state_and_records_the_fixed_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OMP_NUM_THREADS", "48")
+    monkeypatch.setenv("OMP_SCHEDULE", "dynamic")
+    monkeypatch.setenv("UNRELATED_RAW_ENV", "must-not-be-inherited")
     source = tmp_path / "photo.arw"
     _write_uint16_tiff(source)
     before = _sha256(source)
@@ -70,6 +75,13 @@ target.with_suffix(".invocation.json").write_text(json.dumps({
     "args": args,
     "settings": os.environ.get("RT_SETTINGS"),
     "cache": os.environ.get("RT_CACHE"),
+    "tmpdir": os.environ.get("TMPDIR"),
+    "path": os.environ.get("PATH"),
+    "locale": os.environ.get("LC_ALL"),
+    "omp_num_threads": os.environ.get("OMP_NUM_THREADS"),
+    "omp_dynamic": os.environ.get("OMP_DYNAMIC"),
+    "omp_schedule": os.environ.get("OMP_SCHEDULE"),
+    "unrelated": os.environ.get("UNRELATED_RAW_ENV"),
 }), encoding="utf-8")
 print("processed deterministically")
 """,
@@ -102,6 +114,13 @@ print("processed deterministically")
     ]
     assert invocation["settings"] == str(work / "settings")
     assert invocation["cache"] == str(work / "cache")
+    assert invocation["tmpdir"] == str(work / "tmp")
+    assert invocation["path"] == "/bin:/usr/bin"
+    assert invocation["locale"] == "C"
+    assert invocation["omp_num_threads"] == "1"
+    assert invocation["omp_dynamic"] == "FALSE"
+    assert invocation["omp_schedule"] == "static"
+    assert invocation["unrelated"] is None
     assert copied_profile.read_bytes() == profile.read_bytes()
     assert result.output_sha256 == _sha256(target)
     assert result.profile_sha256 == _sha256(profile)
@@ -115,6 +134,16 @@ print("processed deterministically")
     assert report["tool_version"] == "5.13"
     assert report["tool_version_after"] == "5.13"
     assert report["profile_sha256_after"] == _sha256(profile)
+    assert report["environment"] == {
+        "LC_ALL": "C",
+        "OMP_DYNAMIC": "FALSE",
+        "OMP_NUM_THREADS": "1",
+        "OMP_SCHEDULE": "static",
+        "PATH": "/bin:/usr/bin",
+        "RT_CACHE": str(work / "cache"),
+        "RT_SETTINGS": str(work / "settings"),
+        "TMPDIR": str(work / "tmp"),
+    }
 
 
 def test_develop_raw_surfaces_failure_and_does_not_admit_partial_output(tmp_path: Path) -> None:

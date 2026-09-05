@@ -580,8 +580,10 @@ def develop_raw(
     work_directory.mkdir(parents=True, exist_ok=False)
     settings = work_directory / "settings"
     cache = work_directory / "cache"
+    temporary = work_directory / "tmp"
     settings.mkdir()
     cache.mkdir()
+    temporary.mkdir()
     copied_profile = work_directory / "development.pp3"
     shutil.copyfile(profile, copied_profile)
     profile_sha256 = _sha256(copied_profile)
@@ -600,9 +602,16 @@ def develop_raw(
         "-c",
         str(source),
     ]
-    environment = os.environ.copy()
-    environment["RT_SETTINGS"] = str(settings)
-    environment["RT_CACHE"] = str(cache)
+    environment = {
+        "LC_ALL": "C",
+        "OMP_DYNAMIC": "FALSE",
+        "OMP_NUM_THREADS": "1",
+        "OMP_SCHEDULE": "static",
+        "PATH": os.defpath,
+        "RT_CACHE": str(cache),
+        "RT_SETTINGS": str(settings),
+        "TMPDIR": str(temporary),
+    }
     before = _sha256(source)
     tool_version = _tool_version(executable)
     if tool_version != SUPPORTED_RAWTHERAPEE_VERSION:
@@ -652,7 +661,7 @@ def develop_raw(
         "executable_sha256": executable_sha256,
         "executable_sha256_after": executable_sha256_after,
         "arguments": arguments[1:],
-        "environment": {"RT_SETTINGS": str(settings), "RT_CACHE": str(cache)},
+        "environment": environment,
         "duration_seconds": round(time.monotonic() - started, 6),
         "returncode": returncode,
         "stdout": stdout,

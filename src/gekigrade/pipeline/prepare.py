@@ -32,6 +32,7 @@ from gekigrade.adapters.rawtherapee import (
     inspect_lensfun_database,
     inspect_lensfun_support,
     lensfun_database_for_executable,
+    path_has_symlink,
     rawtherapee_output_profile_for_executable,
 )
 from gekigrade.analysis.metrics import analyze_srgb
@@ -583,6 +584,8 @@ def prepare_job(
         raise ValueError("unsupported source format; expected JPEG or Sony ARW")
     source_format = source["format"]
     inspected_oriented_dimensions = dict(source["oriented_dimensions"])
+    if source_format == "ARW" and path_has_symlink(rawtherapee_executable):
+        raise RawTherapeeError("RawTherapee CLI has a symlinked path component")
     if source_format == "ARW" and (
         DEFAULT_RAW_PROFILE.is_symlink()
         or not DEFAULT_RAW_PROFILE.is_file()
@@ -600,6 +603,7 @@ def prepare_job(
     raw_lensfun_database_status: ResourceStatus | None = None
     raw_lensfun_database_path: Path | None = None
     developed_artifact: tuple[Path, str] | None = None
+    raw_run_report_artifact: tuple[Path, str] | None = None
     if source_format == "JPEG":
         normalization_tool = normalize_jpeg(
             source_path.resolve(),
@@ -647,6 +651,7 @@ def prepare_job(
             executable=rawtherapee_executable,
         )
         developed_artifact = (developed, result.output_sha256)
+        raw_run_report_artifact = (result.report_path, result.report_sha256)
         if result.profile_sha256 != EXPECTED_DEFAULT_RAW_PROFILE_SHA256 or not _artifact_matches(
             result.profile_path, result.profile_sha256
         ):
@@ -692,6 +697,7 @@ def prepare_job(
             "profile_sha256": result.profile_sha256,
             "camera_input_profile": raw_camera_input_profile,
             "run_report_path": str(result.report_path.relative_to(job)),
+            "run_report_sha256": result.report_sha256,
             "developed_tiff_sha256": result.output_sha256,
             "inspected_oriented_dimensions": inspected_oriented_dimensions,
             "intermediate_profile": intermediate_profile,
@@ -783,6 +789,8 @@ def prepare_job(
         raise RawTherapeeError("RawTherapee output ICC profile changed before manifest publication")
     if developed_artifact is not None and not _artifact_matches(*developed_artifact):
         raise RawTherapeeError("developed TIFF changed before manifest publication")
+    if raw_run_report_artifact is not None and not _artifact_matches(*raw_run_report_artifact):
+        raise RawTherapeeError("RawTherapee run report changed before manifest publication")
     if raw_camera_resources_status is not None and (
         inspect_camera_resources(executable=rawtherapee_executable) != raw_camera_resources_status
         or inspect_camera_input_profile(
@@ -846,6 +854,9 @@ def prepare_job(
     if developed_artifact is not None and not _artifact_matches(*developed_artifact):
         manifest_path.unlink(missing_ok=True)
         raise RawTherapeeError("developed TIFF changed while publishing the manifest")
+    if raw_run_report_artifact is not None and not _artifact_matches(*raw_run_report_artifact):
+        manifest_path.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee run report changed while publishing the manifest")
     if raw_camera_resources_status is not None and (
         inspect_camera_resources(executable=rawtherapee_executable) != raw_camera_resources_status
         or inspect_camera_input_profile(

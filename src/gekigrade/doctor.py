@@ -28,6 +28,7 @@ from gekigrade.adapters.rawtherapee import (
     inspect_camera_resources,
     inspect_lensfun_database,
     lensfun_database_for_executable,
+    path_has_symlink,
     rawtherapee_output_profile_for_executable,
 )
 from gekigrade.adapters.tools import ExternalTool, ToolStatus, inspect_tool
@@ -128,19 +129,8 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
 
-def _path_has_symlink(path: Path) -> bool:
-    current = path.absolute()
-    while True:
-        if current.is_symlink():
-            return True
-        parent = current.parent
-        if parent == current:
-            return False
-        current = parent
-
-
 def _rawtherapee_status(*, executable: Path, plist: Path) -> ToolStatus:
-    if _path_has_symlink(executable):
+    if path_has_symlink(executable):
         return ToolStatus(
             name="rawtherapee",
             available=False,

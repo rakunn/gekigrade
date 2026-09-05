@@ -463,6 +463,25 @@ def test_prepare_does_not_expose_a_raw_profile_override() -> None:
     assert "raw_output_profile" not in inspect.signature(prepare_job).parameters
 
 
+def test_prepare_rejects_a_symlinked_rawtherapee_bundle_before_creating_job(
+    tmp_path: Path,
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    linked_root = tmp_path / "linked-root"
+    linked_root.symlink_to(tmp_path, target_is_directory=True)
+    linked_executable = linked_root / rawtherapee.relative_to(tmp_path)
+    job = tmp_path / "raw-job"
+
+    with pytest.raises(RawTherapeeError, match="symlinked path"):
+        prepare_job(
+            source,
+            job,
+            exiftool_executable=exiftool,
+            rawtherapee_executable=linked_executable,
+        )
+    assert not job.exists()
+
+
 def test_prepare_rejects_a_modified_shipped_raw_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -758,6 +777,35 @@ def test_prepare_removes_manifest_if_developed_tiff_changes_while_published(
     monkeypatch.setattr(prepare_module, "_artifact_manifest", change_developed_then_build_manifest)
 
     with pytest.raises(RawTherapeeError, match="developed TIFF changed while publishing"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+@pytest.mark.parametrize("change", ["modify", "remove"])
+def test_prepare_removes_manifest_if_raw_run_report_changes_while_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    original_manifest = prepare_module._artifact_manifest
+
+    def change_report_then_build_manifest(
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
+    ) -> dict[str, object]:
+        report = job / "intermediate/rawtherapee/run.json"
+        if change == "modify":
+            report.write_text('{"forged": true}\n', encoding="utf-8")
+        else:
+            report.unlink()
+        return original_manifest(job, metadata, **profile_hashes)
+
+    monkeypatch.setattr(prepare_module, "_artifact_manifest", change_report_then_build_manifest)
+
+    with pytest.raises(RawTherapeeError, match="run report changed while publishing"):
         prepare_job(
             source,
             tmp_path / "raw-job",

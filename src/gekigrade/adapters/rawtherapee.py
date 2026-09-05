@@ -97,6 +97,7 @@ class RawDevelopmentResult:
     profile_path: Path
     profile_sha256: str
     report_path: Path
+    report_sha256: str
 
 
 def _sha256(path: Path) -> str:
@@ -113,6 +114,17 @@ def _sha256_stream(stream: BinaryIO) -> str:
 
 def _file_identity(status: os.stat_result) -> tuple[int, int, int, int, int]:
     return (status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
+
+
+def path_has_symlink(path: Path) -> bool:
+    current = path.absolute()
+    while True:
+        if current.is_symlink():
+            return True
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
 
 
 def _stable_source_sha256(path: Path) -> str | None:
@@ -581,6 +593,8 @@ def _validate_inputs(
         raise ValueError("RAW source must be a regular, non-symlink file")
     if profile.is_symlink() or not profile.is_file():
         raise ValueError("RAW development profile must be a regular, non-symlink file")
+    if path_has_symlink(executable):
+        raise RawTherapeeError("RawTherapee CLI has a symlinked path component")
     if not executable.is_file() or executable.stat().st_mode & 0o111 == 0:
         raise RawTherapeeError("RawTherapee CLI is unavailable; run `geki doctor`")
     installed_version = _tool_version(executable)
@@ -734,6 +748,10 @@ def develop_raw(
     output_sha256 = _validate_developed_tiff(target)
     report["output_sha256"] = output_sha256
     write_json(report_path, report)
+    report_sha256 = _stable_source_sha256(report_path)
+    if report_sha256 is None:
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee run report is not a stable regular file")
     return RawDevelopmentResult(
         output_path=target,
         output_sha256=output_sha256,
@@ -741,4 +759,5 @@ def develop_raw(
         profile_path=copied_profile,
         profile_sha256=profile_sha256,
         report_path=report_path,
+        report_sha256=report_sha256,
     )

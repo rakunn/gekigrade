@@ -126,6 +126,7 @@ print("processed deterministically")
     assert copied_profile.read_bytes() == profile.read_bytes()
     assert result.output_sha256 == _sha256(target)
     assert result.profile_sha256 == _sha256(profile)
+    assert result.report_sha256 == _sha256(work / "run.json")
     report = json.loads((work / "run.json").read_text(encoding="utf-8"))
     assert report["returncode"] == 0
     assert report["stdout"] == "processed deterministically"

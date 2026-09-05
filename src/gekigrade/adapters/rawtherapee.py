@@ -394,11 +394,15 @@ def inspect_camera_input_profile(
     _load_camera_constants(camera_constants_path)
     profile_key = camera_make_model
     wanted = camera_make_model.casefold()
+    matching_profile_keys: list[str] = []
     for canonical, alias_values in aliases.items():
         candidates = [canonical, *alias_values]
         if any(candidate.casefold() == wanted for candidate in candidates):
-            profile_key = canonical
-            break
+            matching_profile_keys.append(canonical)
+    if len(matching_profile_keys) > 1:
+        raise RawTherapeeError(f"multiple camera alias mappings match {camera_make_model}")
+    if matching_profile_keys:
+        profile_key = matching_profile_keys[0]
     profile_path = _find_profile(dcp_directory, profile_key, {".dcp"})
     resolved_kind = "dcp"
     if profile_path is None:

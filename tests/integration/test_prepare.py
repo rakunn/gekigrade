@@ -597,6 +597,23 @@ def test_raw_source_match_rejects_a_fifo_without_hashing_it(
     assert prepare_module._raw_source_matches(fifo, "not-a-real-digest") is False
 
 
+def test_inspect_rejects_an_oversized_raw_before_hashing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "oversized.ARW"
+    source.write_bytes(b"II*\x00")
+    with source.open("r+b") as stream:
+        stream.truncate(prepare_module.MAX_SOURCE_BYTES + 1)
+
+    def reject_hash(_: object) -> str:
+        raise AssertionError("oversized RAW must be rejected before hashing")
+
+    monkeypatch.setattr(prepare_module, "_sha256_stream", reject_hash)
+
+    with pytest.raises(ValueError, match="ARW exceeds the 1 GiB safety limit"):
+        inspect_photo(source, exiftool_executable=tmp_path / "unused-exiftool")
+
+
 def test_prepare_removes_manifest_if_raw_disappears_while_published(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

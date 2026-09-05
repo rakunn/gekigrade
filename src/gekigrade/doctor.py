@@ -36,6 +36,11 @@ EXIFTOOL_CLI = Path("/opt/homebrew/bin/exiftool")
 IMAGEMAGICK_CLI = Path("/opt/homebrew/bin/magick")
 RAWTHERAPEE_CLI = Path("/Applications/RawTherapee.app/Contents/MacOS/rawtherapee-cli")
 RAWTHERAPEE_PLIST = Path("/Applications/RawTherapee.app/Contents/Info.plist")
+EXIFTOOL_ENVIRONMENT = {
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+}
 MAGICK_ENVIRONMENT = {
     "LANG": "C",
     "LC_ALL": "C",
@@ -230,9 +235,10 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
             ExternalTool(
                 name="exiftool",
                 candidates=(str(EXIFTOOL_CLI),),
-                version_args=("-ver",),
+                version_args=("-config", "", "-ver"),
                 install_hint="Install with: brew install exiftool",
-            )
+            ),
+            environment=EXIFTOOL_ENVIRONMENT,
         ),
         "imagemagick": inspect_tool(
             ExternalTool(

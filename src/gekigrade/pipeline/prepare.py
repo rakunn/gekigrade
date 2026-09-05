@@ -37,6 +37,7 @@ from gekigrade.doctor import (
     build_doctor_report,
     sha256_file,
 )
+from gekigrade.doctor import EXIFTOOL_ENVIRONMENT as DOCTOR_EXIFTOOL_ENVIRONMENT
 from gekigrade.domain.jsonio import write_json
 from gekigrade.domain.models import EditPlan
 from gekigrade.domain.paths import create_job_directory
@@ -47,11 +48,7 @@ MAX_SOURCE_BYTES = 1024 * 1024 * 1024
 MAX_PIXEL_COUNT = 200_000_000
 RAW_MIN_DIMENSION_RETENTION_PERCENT = 95
 EXIFTOOL = EXIFTOOL_CLI
-EXIFTOOL_ENVIRONMENT = {
-    "LANG": "C",
-    "LC_ALL": "C",
-    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-}
+EXIFTOOL_ENVIRONMENT = DOCTOR_EXIFTOOL_ENVIRONMENT
 
 
 def _inspect_jpeg(
@@ -401,6 +398,8 @@ def _stable_regular_file_snapshot(path: Path) -> tuple[str, int] | None:
             opened_identity = _file_identity(opened_status)
             if not stat.S_ISREG(opened_status.st_mode):
                 return None
+            if opened_status.st_size > MAX_SOURCE_BYTES:
+                raise ValueError("ARW exceeds the 1 GiB safety limit")
             actual_sha256 = _sha256_stream(stream)
             closed_identity = _file_identity(os.fstat(stream.fileno()))
         path_status = path.lstat()
@@ -416,7 +415,10 @@ def _stable_regular_file_snapshot(path: Path) -> tuple[str, int] | None:
 
 
 def _raw_source_matches(path: Path, expected_sha256: str) -> bool:
-    snapshot = _stable_regular_file_snapshot(path)
+    try:
+        snapshot = _stable_regular_file_snapshot(path)
+    except ValueError:
+        return False
     return snapshot is not None and snapshot[0] == expected_sha256
 
 

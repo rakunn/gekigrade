@@ -79,6 +79,34 @@ def test_doctor_color_probe_uses_the_preparation_environment(
     assert report["color_probe"]["environment"] == doctor_module.MAGICK_ENVIRONMENT
 
 
+def test_doctor_exiftool_probe_disables_configuration_and_uses_pinned_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_commands: list[list[str]] = []
+    observed_environments: list[dict[str, str] | None] = []
+    real_run = subprocess.run
+
+    def capture_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        if isinstance(command, list) and command[0] == str(doctor_module.EXIFTOOL_CLI):
+            observed_commands.append(command)
+            observed_environments.append(kwargs.get("env"))
+            return subprocess.CompletedProcess(command, 0, "13.55\n", "")
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setenv("HOME", "/caller/home")
+    monkeypatch.setenv("EXIFTOOL_HOME", "/caller/exiftool-home")
+    monkeypatch.setattr(subprocess, "run", capture_run)
+
+    report = build_doctor_report(run_color_probe=False)
+
+    assert observed_commands == [[str(doctor_module.EXIFTOOL_CLI), "-config", "", "-ver"]]
+    assert observed_environments == [
+        {"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
+    ]
+    assert report["tools"]["exiftool"]["available"] is True
+
+
 def test_doctor_reports_raw_adapter_separately_from_jpeg_readiness() -> None:
     report = build_doctor_report()
 

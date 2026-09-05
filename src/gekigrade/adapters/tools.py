@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,7 +36,12 @@ def _locate(candidates: tuple[str, ...]) -> str | None:
     return None
 
 
-def inspect_tool(tool: ExternalTool, *, timeout_seconds: float = 5.0) -> ToolStatus:
+def inspect_tool(
+    tool: ExternalTool,
+    *,
+    timeout_seconds: float = 5.0,
+    environment: Mapping[str, str] | None = None,
+) -> ToolStatus:
     path = _locate(tool.candidates)
     if path is None:
         return ToolStatus(
@@ -54,6 +60,7 @@ def inspect_tool(tool: ExternalTool, *, timeout_seconds: float = 5.0) -> ToolSta
             text=True,
             timeout=timeout_seconds,
             stdin=subprocess.DEVNULL,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return ToolStatus(

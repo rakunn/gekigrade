@@ -532,6 +532,27 @@ def test_camera_input_profile_records_matrix_fallback_resources(tmp_path: Path) 
     assert result["camera_constants_sha256"] == _sha256(camera_constants)
 
 
+def test_camera_input_profile_rejects_ambiguous_alias_mappings(tmp_path: Path) -> None:
+    executable = _write_rawtherapee_app(tmp_path, "5.13", "#!/bin/sh\nexit 0\n")
+    resources = executable.parent.parent / "Resources/share"
+    dcp_directory = resources / "dcpprofiles"
+    dcp_directory.mkdir(parents=True)
+    (dcp_directory / "camera_model_aliases.json").write_text(
+        json.dumps(
+            {
+                "SONY ILCE-7RM5": [],
+                "sony ilce-7rm5": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (resources / "iccprofiles/input").mkdir(parents=True)
+    (resources / "camconst.json").write_text('{"camera_constants": []}\n', encoding="utf-8")
+
+    with pytest.raises(RawTherapeeError, match="multiple camera alias mappings"):
+        inspect_camera_input_profile({"Make": "SONY", "Model": "ILCE-7RM5"}, executable=executable)
+
+
 def test_camera_input_profile_rejects_malformed_camera_constants(tmp_path: Path) -> None:
     executable = _write_rawtherapee_app(tmp_path, "5.13", "#!/bin/sh\nexit 0\n")
     resources = executable.parent.parent / "Resources/share"

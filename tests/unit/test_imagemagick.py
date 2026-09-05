@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -94,15 +97,64 @@ fi
     assert "UNRELATED_CALLER_VALUE" not in observed
 
 
-def test_run_magick_rejects_an_executable_changed_during_processing(tmp_path: Path) -> None:
+def test_run_magick_executes_the_identity_bound_binary_when_selected_path_is_swapped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     executable = _write_executable(
         tmp_path / "magick",
         """#!/bin/sh
 if [ "$1" = "-version" ]; then
+  echo "ImageMagick 7.1.1-original"
+  exit 0
+fi
+echo original > "$1"
+""",
+    )
+    replacement = _write_executable(
+        tmp_path / "replacement-magick",
+        """#!/bin/sh
+if [ "$1" = "-version" ]; then
+  echo "ImageMagick 7.1.1-replacement"
+  exit 0
+fi
+echo replacement > "$1"
+""",
+    )
+    report = tmp_path / "producer.txt"
+    original_run = subprocess.run
+
+    def run_while_selected_path_is_swapped(*args: Any, **kwargs: Any) -> Any:
+        command = args[0]
+        if isinstance(command, list) and "-version" not in command:
+            backup = executable.with_suffix(".backup")
+            executable.rename(backup)
+            shutil.copyfile(replacement, executable)
+            executable.chmod(0o755)
+            try:
+                return original_run(*args, **kwargs)
+            finally:
+                executable.unlink(missing_ok=True)
+                backup.rename(executable)
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run_while_selected_path_is_swapped)
+
+    with pytest.raises(ProcessorError, match="executable changed during processing"):
+        run_magick([str(report)], executable=executable)
+
+    assert report.read_text(encoding="utf-8").strip() == "original"
+
+
+def test_run_magick_rejects_an_executable_changed_during_processing(tmp_path: Path) -> None:
+    executable = tmp_path / "magick"
+    executable = _write_executable(
+        executable,
+        f"""#!/bin/sh
+if [ "$1" = "-version" ]; then
   echo "ImageMagick 7.1.1-test"
   exit 0
 fi
-echo "# changed" >> "$0"
+echo "# changed" >> "{executable}"
 exit 0
 """,
     )

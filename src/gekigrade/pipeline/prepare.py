@@ -39,7 +39,11 @@ from gekigrade.adapters.rawtherapee import (
     rawtherapee_bundle_has_symlink,
     rawtherapee_output_profile_for_executable,
 )
-from gekigrade.adapters.tools import ToolStatus
+from gekigrade.adapters.tools import (
+    ExecutableSnapshotError,
+    ToolStatus,
+    identity_bound_executable,
+)
 from gekigrade.analysis.metrics import analyze_srgb
 from gekigrade.doctor import (
     ACESCG_PROFILE,
@@ -119,11 +123,18 @@ def inspect_jpeg(path: Path) -> dict[str, Any]:
     return result
 
 
-def _exiftool_identity(executable: Path) -> dict[str, Any]:
+def _exiftool_identity(
+    executable: Path,
+    *,
+    reported_path: Path | None = None,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
     if not executable.is_file() or executable.stat().st_mode & 0o111 == 0:
         raise RuntimeError("ExifTool is unavailable; run `geki doctor`")
     resolved = executable.resolve(strict=True)
     executable_sha256 = sha256_file(resolved)
+    if expected_sha256 is not None and executable_sha256 != expected_sha256:
+        raise RuntimeError("ExifTool executable snapshot has an unexpected digest")
     version_result = subprocess.run(
         [str(resolved), "-config", "", "-ver"],
         capture_output=True,
@@ -142,7 +153,7 @@ def _exiftool_identity(executable: Path) -> dict[str, Any]:
         raise RuntimeError("ExifTool executable changed during version inspection")
     return {
         "name": "ExifTool",
-        "path": str(resolved),
+        "path": str(reported_path or resolved),
         "version": version,
         "executable_sha256": executable_sha256,
         "configuration": "disabled",
@@ -153,41 +164,47 @@ def _exiftool_identity(executable: Path) -> dict[str, Any]:
 def _read_exiftool(
     path: Path, *, executable: Path = EXIFTOOL
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    identity = _exiftool_identity(executable)
-    result = subprocess.run(
-        [
-            identity["path"],
-            "-config",
-            "",
-            "-json",
-            "-n",
-            "-FileType",
-            "-MIMEType",
-            "-ImageWidth",
-            "-ImageHeight",
-            "-Orientation",
-            "-Make",
-            "-Model",
-            "-LensMake",
-            "-LensModel",
-            "-ExposureTime",
-            "-FNumber",
-            "-ISO",
-            "-FocalLength",
-            "-DateTimeOriginal",
-            str(path),
-        ],
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=15,
-        stdin=subprocess.DEVNULL,
-        env=EXIFTOOL_ENVIRONMENT,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"ExifTool failed: {result.stderr.strip()}")
-    if _exiftool_identity(Path(identity["path"])) != identity:
-        raise RuntimeError("ExifTool executable changed during metadata inspection")
+    try:
+        with identity_bound_executable(executable, label="ExifTool") as bound:
+            identity = _exiftool_identity(
+                bound.path,
+                reported_path=bound.original_path,
+                expected_sha256=bound.sha256,
+            )
+            result = subprocess.run(
+                [
+                    str(bound.path),
+                    "-config",
+                    "",
+                    "-json",
+                    "-n",
+                    "-FileType",
+                    "-MIMEType",
+                    "-ImageWidth",
+                    "-ImageHeight",
+                    "-Orientation",
+                    "-Make",
+                    "-Model",
+                    "-LensMake",
+                    "-LensModel",
+                    "-ExposureTime",
+                    "-FNumber",
+                    "-ISO",
+                    "-FocalLength",
+                    "-DateTimeOriginal",
+                    str(path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=15,
+                stdin=subprocess.DEVNULL,
+                env=EXIFTOOL_ENVIRONMENT,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"ExifTool failed: {result.stderr.strip()}")
+    except ExecutableSnapshotError as exc:
+        raise RuntimeError(str(exc)) from exc
     records: object = json.loads(result.stdout)
     if not isinstance(records, list) or not records or not isinstance(records[0], dict):
         return {}, identity

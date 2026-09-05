@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TypedDict
 
+from gekigrade.adapters.tools import ExecutableSnapshotError, identity_bound_executable
 from gekigrade.doctor import (
     ACESCG_PROFILE,
     IMAGEMAGICK_CLI,
@@ -174,13 +175,20 @@ def _stable_profile_snapshots(target: Path, profiles: dict[str, Path]) -> Iterat
             snapshot.unlink(missing_ok=True)
 
 
-def _magick_identity(executable: Path) -> ProcessorIdentity:
+def _magick_identity(
+    executable: Path,
+    *,
+    reported_path: Path | None = None,
+    expected_sha256: str | None = None,
+) -> ProcessorIdentity:
     if not executable.is_file() or executable.stat().st_mode & 0o111 == 0:
         raise ProcessorError(
             "ImageMagick is unavailable; run `geki doctor` for installation guidance"
         )
     resolved = executable.resolve(strict=True)
     executable_sha256 = _sha256(resolved)
+    if expected_sha256 is not None and executable_sha256 != expected_sha256:
+        raise ProcessorError("ImageMagick executable snapshot has an unexpected digest")
     try:
         result = subprocess.run(
             [str(resolved), "-version"],
@@ -201,7 +209,7 @@ def _magick_identity(executable: Path) -> ProcessorIdentity:
         raise ProcessorError("ImageMagick executable changed during version inspection")
     return {
         "name": "ImageMagick",
-        "path": str(resolved),
+        "path": str(reported_path or resolved),
         "version": output[0].strip(),
         "executable_sha256": executable_sha256,
         "environment": dict(MAGICK_ENVIRONMENT),
@@ -211,25 +219,31 @@ def _magick_identity(executable: Path) -> ProcessorIdentity:
 def run_magick(
     arguments: list[str], *, executable: Path = MAGICK, timeout_seconds: float = 120.0
 ) -> ProcessorIdentity:
-    identity = _magick_identity(executable)
     try:
-        result = subprocess.run(
-            [identity["path"], *arguments],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=timeout_seconds,
-            stdin=subprocess.DEVNULL,
-            env=MAGICK_ENVIRONMENT,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ProcessorError(f"ImageMagick could not complete: {exc}") from exc
-    if result.returncode != 0:
-        detail = result.stderr.strip() or "unknown ImageMagick error"
-        raise ProcessorError(f"ImageMagick failed: {detail}")
-    if _magick_identity(Path(identity["path"])) != identity:
-        raise ProcessorError("ImageMagick executable changed during processing")
-    return identity
+        with identity_bound_executable(executable, label="ImageMagick") as bound:
+            identity = _magick_identity(
+                bound.path,
+                reported_path=bound.original_path,
+                expected_sha256=bound.sha256,
+            )
+            try:
+                result = subprocess.run(
+                    [str(bound.path), *arguments],
+                    capture_output=True,
+                    check=False,
+                    text=True,
+                    timeout=timeout_seconds,
+                    stdin=subprocess.DEVNULL,
+                    env=MAGICK_ENVIRONMENT,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise ProcessorError(f"ImageMagick could not complete: {exc}") from exc
+            if result.returncode != 0:
+                detail = result.stderr.strip() or "unknown ImageMagick error"
+                raise ProcessorError(f"ImageMagick failed: {detail}")
+        return identity
+    except ExecutableSnapshotError as exc:
+        raise ProcessorError(str(exc)) from exc
 
 
 def normalize_jpeg(

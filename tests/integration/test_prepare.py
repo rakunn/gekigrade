@@ -1798,11 +1798,60 @@ finally:
     assert source.read_bytes() == source_before
 
 
+def test_inspect_executes_an_identity_bound_exiftool_when_selected_path_is_swapped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, _, _ = _raw_test_dependencies(tmp_path)
+    replacement = _write_executable(
+        tmp_path / "replacement-exiftool",
+        """#!/usr/bin/env python3
+import json
+import sys
+
+if sys.argv[1:] == ["-config", "", "-ver"]:
+    print("99.99")
+    raise SystemExit
+
+print(json.dumps([{
+    "SourceFile": sys.argv[-1],
+    "FileType": "ARW",
+    "MIMEType": "image/x-sony-arw",
+    "ImageWidth": 180,
+    "ImageHeight": 120,
+    "Orientation": 1,
+    "Make": "MALICIOUS",
+    "Model": "REPLACEMENT"
+}]))
+""",
+    )
+    original_run = subprocess.run
+
+    def run_while_selected_path_is_swapped(*args: Any, **kwargs: Any) -> Any:
+        command = args[0]
+        if isinstance(command, list) and "-json" in command:
+            backup = exiftool.with_suffix(".backup")
+            exiftool.rename(backup)
+            shutil.copyfile(replacement, exiftool)
+            exiftool.chmod(0o755)
+            try:
+                return original_run(*args, **kwargs)
+            finally:
+                exiftool.unlink(missing_ok=True)
+                backup.rename(exiftool)
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run_while_selected_path_is_swapped)
+
+    with pytest.raises(RuntimeError, match="ExifTool executable changed during processing"):
+        inspect_photo(source, exiftool_executable=exiftool)
+
+
 def test_inspect_rejects_an_exiftool_binary_changed_during_metadata_read(tmp_path: Path) -> None:
     source, _, _, _ = _raw_test_dependencies(tmp_path)
+    exiftool_path = tmp_path / "mutating-exiftool"
     exiftool = _write_executable(
-        tmp_path / "mutating-exiftool",
-        """#!/usr/bin/env python3
+        exiftool_path,
+        f"""#!/usr/bin/env python3
 import json
 import pathlib
 import sys
@@ -1811,7 +1860,7 @@ if sys.argv[1:] == ["-config", "", "-ver"]:
     print("13.55")
     raise SystemExit
 
-metadata = {
+metadata = {{
     "SourceFile": sys.argv[-1],
     "FileType": "ARW",
     "MIMEType": "image/x-sony-arw",
@@ -1820,12 +1869,12 @@ metadata = {
     "Orientation": 1,
     "Make": "SONY",
     "Model": "ILCE-TEST"
-}
-with pathlib.Path(__file__).open("a", encoding="utf-8") as stream:
+}}
+with pathlib.Path({str(exiftool_path)!r}).open("a", encoding="utf-8") as stream:
     stream.write("\\n# changed during metadata read\\n")
 print(json.dumps([metadata]))
 """,
     )
 
-    with pytest.raises(RuntimeError, match="ExifTool executable changed during metadata"):
+    with pytest.raises(RuntimeError, match="ExifTool executable changed during processing"):
         inspect_photo(source, exiftool_executable=exiftool)

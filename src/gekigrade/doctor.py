@@ -230,6 +230,8 @@ def build_doctor_report(
     raw_output_profile_status: dict[str, str | bool | None] | None = None,
     raw_camera_resources_status: CameraResourceStatus | None = None,
     raw_lensfun_database_status: ResourceStatus | None = None,
+    exiftool_tool_status: ToolStatus | None = None,
+    imagemagick_tool_status: ToolStatus | None = None,
     rawtherapee_tool_status: ToolStatus | None = None,
 ) -> dict[str, Any]:
     selected_exiftool = exiftool_executable or EXIFTOOL_CLI
@@ -242,23 +244,31 @@ def build_doctor_report(
     )
     rawtherapee_output_profile = rawtherapee_output_profile_for_executable(selected_rawtherapee)
     tools = {
-        "exiftool": inspect_tool(
-            ExternalTool(
-                name="exiftool",
-                candidates=(str(selected_exiftool),),
-                version_args=("-config", "", "-ver"),
-                install_hint="Install with: brew install exiftool",
-            ),
-            environment=EXIFTOOL_ENVIRONMENT,
+        "exiftool": (
+            exiftool_tool_status
+            if exiftool_tool_status is not None
+            else inspect_tool(
+                ExternalTool(
+                    name="exiftool",
+                    candidates=(str(selected_exiftool),),
+                    version_args=("-config", "", "-ver"),
+                    install_hint="Install with: brew install exiftool",
+                ),
+                environment=EXIFTOOL_ENVIRONMENT,
+            )
         ),
-        "imagemagick": inspect_tool(
-            ExternalTool(
-                name="imagemagick",
-                candidates=(str(selected_imagemagick),),
-                version_args=("-version",),
-                install_hint="Install with: brew install imagemagick",
-            ),
-            environment=MAGICK_ENVIRONMENT,
+        "imagemagick": (
+            imagemagick_tool_status
+            if imagemagick_tool_status is not None
+            else inspect_tool(
+                ExternalTool(
+                    name="imagemagick",
+                    candidates=(str(selected_imagemagick),),
+                    version_args=("-version",),
+                    install_hint="Install with: brew install imagemagick",
+                ),
+                environment=MAGICK_ENVIRONMENT,
+            )
         ),
         "rawtherapee": (
             rawtherapee_tool_status

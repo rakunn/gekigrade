@@ -306,12 +306,31 @@ def inspect_photo(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[s
     raise ValueError("unsupported source format; expected JPEG or Sony ARW")
 
 
-def _embedded_profile(path: Path) -> dict[str, Any]:
+def _embedded_profile(path: Path, *, expected_sha256: str | None = None) -> dict[str, Any]:
+    flags = os.O_RDONLY | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     try:
-        with Image.open(path) as image:
-            profile = image.info.get("icc_profile")
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            opened_status = os.fstat(stream.fileno())
+            opened_identity = _file_identity(opened_status)
+            if not stat.S_ISREG(opened_status.st_mode):
+                raise OSError("developed TIFF is not a regular file")
+            actual_sha256 = _sha256_stream(stream)
+            stream.seek(0)
+            with Image.open(stream) as image:
+                profile = image.info.get("icc_profile")
+            closed_identity = _file_identity(os.fstat(stream.fileno()))
+        path_status = path.lstat()
     except (OSError, SyntaxError) as exc:
         raise RuntimeError(f"developed TIFF cannot be decoded: {exc}") from exc
+    if (
+        not stat.S_ISREG(path_status.st_mode)
+        or opened_identity != closed_identity
+        or _file_identity(path_status) != opened_identity
+        or (expected_sha256 is not None and actual_sha256 != expected_sha256)
+    ):
+        raise RuntimeError("developed TIFF changed during ICC inspection")
     if not profile:
         raise RuntimeError("developed TIFF has no embedded ICC profile")
     return {
@@ -373,36 +392,49 @@ def _validate_working_tiff(path: Path) -> tuple[dict[str, int], str, str]:
 def _load_validated_srgb(
     path: Path, *, expected_dimensions: tuple[int, int]
 ) -> tuple[np.ndarray[Any, np.dtype[np.float32]], str, str]:
-    if path.is_symlink() or not path.is_file():
-        raise RuntimeError("preview must be a regular, non-symlink JPEG")
-    before = sha256_file(path)
+    flags = os.O_RDONLY | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     try:
-        with Image.open(path) as image:
-            if image.format != "JPEG":
-                raise OSError("decoded preview is not a JPEG")
-            if image.mode != "RGB" or image.getbands() != ("R", "G", "B"):
-                raise OSError("decoded preview is not three-channel RGB")
-            if image.size != expected_dimensions:
-                path.unlink(missing_ok=True)
-                raise RuntimeError(
-                    "preview JPEG dimensions do not match the requested resize: "
-                    f"expected {expected_dimensions[0]}x{expected_dimensions[1]}, "
-                    f"got {image.width}x{image.height}"
-                )
-            profile = image.info.get("icc_profile")
-            image.load()
-            pixels = np.asarray(image, dtype=np.float32) / np.float32(255.0)
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            opened_status = os.fstat(stream.fileno())
+            opened_identity = _file_identity(opened_status)
+            if not stat.S_ISREG(opened_status.st_mode):
+                raise OSError("preview is not a regular file")
+            preview_sha256 = _sha256_stream(stream)
+            stream.seek(0)
+            with Image.open(stream) as image:
+                if image.format != "JPEG":
+                    raise OSError("decoded preview is not a JPEG")
+                if image.mode != "RGB" or image.getbands() != ("R", "G", "B"):
+                    raise OSError("decoded preview is not three-channel RGB")
+                if image.size != expected_dimensions:
+                    path.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        "preview JPEG dimensions do not match the requested resize: "
+                        f"expected {expected_dimensions[0]}x{expected_dimensions[1]}, "
+                        f"got {image.width}x{image.height}"
+                    )
+                profile = image.info.get("icc_profile")
+                image.load()
+                pixels = np.asarray(image, dtype=np.float32) / np.float32(255.0)
+            closed_identity = _file_identity(os.fstat(stream.fileno()))
+        path_status = path.lstat()
     except (OSError, SyntaxError, UnidentifiedImageError) as exc:
         path.unlink(missing_ok=True)
         raise RuntimeError(f"preview JPEG cannot be decoded safely: {exc}") from exc
+    if (
+        not stat.S_ISREG(path_status.st_mode)
+        or opened_identity != closed_identity
+        or _file_identity(path_status) != opened_identity
+    ):
+        path.unlink(missing_ok=True)
+        raise RuntimeError("preview JPEG changed during validation and pixel loading")
     profile_sha256 = hashlib.sha256(profile).hexdigest() if isinstance(profile, bytes) else None
     if profile_sha256 is None or profile_sha256 != sha256_file(SRGB_PROFILE):
         path.unlink(missing_ok=True)
         raise RuntimeError("preview JPEG must embed the expected sRGB profile")
-    if path.is_symlink() or not path.is_file() or sha256_file(path) != before:
-        path.unlink(missing_ok=True)
-        raise RuntimeError("preview JPEG changed during validation and pixel loading")
-    return pixels, before, profile_sha256
+    return pixels, preview_sha256, profile_sha256
 
 
 def _artifact_matches(path: Path, expected_sha256: str) -> bool:
@@ -601,6 +633,8 @@ def _artifact_manifest(
     raw_camera_resources_status: CameraResourceStatus | None = None,
     raw_lensfun_database_status: ResourceStatus | None = None,
     rawtherapee_executable: Path | None = None,
+    exiftool_tool_status: ToolStatus | None = None,
+    imagemagick_tool_status: ToolStatus | None = None,
     rawtherapee_tool_status: ToolStatus | None = None,
 ) -> dict[str, Any]:
     doctor = build_doctor_report(
@@ -611,6 +645,8 @@ def _artifact_manifest(
         raw_output_profile_status=raw_output_profile_status,
         raw_camera_resources_status=raw_camera_resources_status,
         raw_lensfun_database_status=raw_lensfun_database_status,
+        exiftool_tool_status=exiftool_tool_status,
+        imagemagick_tool_status=imagemagick_tool_status,
         rawtherapee_tool_status=rawtherapee_tool_status,
     )
     doctor["profiles"]["acescg"] = {
@@ -663,6 +699,14 @@ def prepare_job(
         raise ValueError("unsupported source format; expected JPEG or Sony ARW")
     source_format = source["format"]
     inspected_oriented_dimensions = dict(source["oriented_dimensions"])
+    metadata_reader = source["metadata_reader"]
+    exiftool_tool_status = ToolStatus(
+        name="exiftool",
+        available=True,
+        path=metadata_reader["path"],
+        version=metadata_reader["version"],
+        install_hint="Install with: brew install exiftool",
+    )
     raw_profile_artifact: tuple[Path, str] | None = None
     raw_output_profile_artifact: tuple[Path, str] | None = None
     raw_output_profile_status: dict[str, str | bool | None] | None = None
@@ -776,7 +820,7 @@ def prepare_job(
             raise RawTherapeeError("Lensfun database changed during RAW development")
         if sha256_file(developed) != result.output_sha256:
             raise RawTherapeeError("developed TIFF changed before profile inspection")
-        intermediate_profile = _embedded_profile(developed)
+        intermediate_profile = _embedded_profile(developed, expected_sha256=result.output_sha256)
         if (
             raw_output_profile.is_symlink()
             or not raw_output_profile.is_file()
@@ -872,6 +916,13 @@ def prepare_job(
         "normalization": normalization_tool,
         "preview": preview_tool,
     }
+    imagemagick_tool_status = ToolStatus(
+        name="imagemagick",
+        available=True,
+        path=preview_tool["path"],
+        version=preview_tool["version"],
+        install_hint="Install with: brew install imagemagick",
+    )
     expected_preview_dimensions = preview_dimensions(
         working_dimensions["width"], working_dimensions["height"]
     )
@@ -955,6 +1006,8 @@ def prepare_job(
             raw_camera_resources_status=raw_camera_resources_status,
             raw_lensfun_database_status=raw_lensfun_database_status,
             rawtherapee_executable=(rawtherapee_executable if source_format == "ARW" else None),
+            exiftool_tool_status=exiftool_tool_status,
+            imagemagick_tool_status=imagemagick_tool_status,
             rawtherapee_tool_status=rawtherapee_tool_status,
         ),
     )

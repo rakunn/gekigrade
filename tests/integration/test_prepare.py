@@ -484,6 +484,60 @@ def test_prepare_manifest_keeps_the_accepted_rawtherapee_tool_status(
     assert manifest["tools"]["raw_status"] == "adapter-ready"
 
 
+@pytest.mark.parametrize("changed_tool", ["exiftool", "imagemagick"])
+def test_prepare_manifest_keeps_accepted_imaging_tool_statuses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_tool: str,
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    imagemagick = _write_executable(
+        tmp_path / "fake-magick",
+        """#!/usr/bin/env python3
+import os
+import sys
+
+os.execv("/opt/homebrew/bin/magick", ["/opt/homebrew/bin/magick", *sys.argv[1:]])
+""",
+    )
+    original_manifest = prepare_module._artifact_manifest
+
+    def change_selected_tool_then_build_manifest(
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
+    ) -> dict[str, object]:
+        selected = exiftool if changed_tool == "exiftool" else imagemagick
+        selected.chmod(0o644)
+        return original_manifest(job, metadata, **profile_hashes)
+
+    monkeypatch.setattr(
+        prepare_module,
+        "_artifact_manifest",
+        change_selected_tool_then_build_manifest,
+    )
+
+    job = prepare_job(
+        source,
+        tmp_path / "raw-job",
+        exiftool_executable=exiftool,
+        rawtherapee_executable=rawtherapee,
+        imagemagick_executable=imagemagick,
+    )
+
+    source_metadata = json.loads((job / "source.json").read_text(encoding="utf-8"))
+    manifest = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["tools"]["tools"]["exiftool"]["available"] is True
+    assert (
+        manifest["tools"]["tools"]["exiftool"]["version"]
+        == source_metadata["metadata_reader"]["version"]
+    )
+    assert manifest["tools"]["tools"]["imagemagick"]["available"] is True
+    assert (
+        manifest["tools"]["tools"]["imagemagick"]["version"]
+        == source_metadata["processing_tools"]["preview"]["version"]
+    )
+    assert manifest["tools"]["ready_for_raw"] is True
+
+
 def test_prepare_manifest_uses_the_selected_exiftool_and_imagemagick(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -503,7 +557,7 @@ def test_prepare_manifest_uses_the_selected_exiftool_and_imagemagick(
 
     manifest = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["tools"]["tools"]["exiftool"]["path"] == str(exiftool)
-    assert manifest["tools"]["tools"]["imagemagick"]["path"] == str(selected_magick)
+    assert manifest["tools"]["tools"]["imagemagick"]["path"] == str(selected_magick.resolve())
     assert manifest["tools"]["ready_for_jpeg"] is True
     assert manifest["tools"]["ready_for_raw"] is True
     assert manifest["tools"]["profiles"]["rawtherapee_camera_resources"][
@@ -1343,6 +1397,53 @@ def test_prepare_rejects_a_working_tiff_changed_during_preview(
     assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
+def test_prepare_rejects_a_developed_tiff_substituted_during_icc_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    original_embedded_profile = prepare_module._embedded_profile
+
+    def inspect_substituted_tiff(path: Path, **kwargs: Any) -> dict[str, Any]:
+        replacement = tmp_path / "replacement-developed.tif"
+        subprocess.run(
+            [
+                "/opt/homebrew/bin/magick",
+                str(path),
+                "-evaluate",
+                "multiply",
+                "0.5",
+                "-depth",
+                "16",
+                "-define",
+                "tiff:bits-per-sample=16",
+                f"TIFF:{replacement}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        backup = path.with_suffix(".backup")
+        path.rename(backup)
+        replacement.rename(path)
+        try:
+            return original_embedded_profile(path, **kwargs)
+        finally:
+            path.unlink(missing_ok=True)
+            backup.rename(path)
+
+    monkeypatch.setattr(prepare_module, "_embedded_profile", inspect_substituted_tiff)
+
+    with pytest.raises(RuntimeError, match="developed TIFF changed during ICC inspection"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
 def test_prepare_previews_an_identity_bound_working_tiff_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1398,6 +1499,54 @@ def test_prepare_previews_an_identity_bound_working_tiff_snapshot(
     )
 
     assert _sha256(raced / "preview.jpg") == expected_preview_sha256
+
+
+def test_prepare_loads_preview_pixels_from_the_hashed_descriptor(
+    tagged_oriented_jpeg: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = tmp_path / "baseline-job"
+    raced = tmp_path / "raced-job"
+    prepare_job(tagged_oriented_jpeg, baseline)
+    replacement = tmp_path / "replacement-preview.jpg"
+    subprocess.run(
+        [
+            "/opt/homebrew/bin/magick",
+            str(baseline / "preview.jpg"),
+            "-evaluate",
+            "multiply",
+            "0.5",
+            "-quality",
+            "92",
+            "-profile",
+            str(SRGB_PROFILE),
+            f"JPEG:{replacement}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    original_open = Image.open
+    preview_path = raced / "preview.jpg"
+
+    def open_while_preview_path_is_replaced(file: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(file, (str, Path)) and Path(file) == preview_path:
+            backup = preview_path.with_suffix(".backup")
+            preview_path.rename(backup)
+            shutil.copyfile(replacement, preview_path)
+            try:
+                return original_open(file, *args, **kwargs)
+            finally:
+                preview_path.unlink(missing_ok=True)
+                backup.rename(preview_path)
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(Image, "open", open_while_preview_path_is_replaced)
+
+    prepare_job(tagged_oriented_jpeg, raced)
+
+    assert (raced / "analysis.json").read_bytes() == (baseline / "analysis.json").read_bytes()
 
 
 def test_prepare_rejects_jpeg_working_dimensions_that_differ_from_source(

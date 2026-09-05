@@ -17,6 +17,7 @@ from PIL import Image
 
 from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
+    EXPECTED_DEFAULT_RAW_PROFILE_SHA256,
     SUPPORTED_RAWTHERAPEE_VERSION,
     inspect_camera_resources,
     inspect_lensfun_database,
@@ -152,10 +153,15 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
     lensfun_database = inspect_lensfun_database(
         database=lensfun_database_for_executable(RAWTHERAPEE_CLI)
     )
+    raw_profile_status = _profile_status(DEFAULT_RAW_PROFILE)
+    raw_profile_status["expected_sha256"] = EXPECTED_DEFAULT_RAW_PROFILE_SHA256
+    raw_profile_status["matches_expected"] = (
+        raw_profile_status["sha256"] == EXPECTED_DEFAULT_RAW_PROFILE_SHA256
+    )
     profiles = {
         "acescg": _profile_status(ACESCG_PROFILE),
         "srgb": _profile_status(SRGB_PROFILE),
-        "raw_development_pp3": _profile_status(DEFAULT_RAW_PROFILE),
+        "raw_development_pp3": raw_profile_status,
         "rawtherapee_output": _profile_status(rawtherapee_output_profile),
         "rawtherapee_camera_resources": camera_resources,
         "lensfun_database": lensfun_database,
@@ -174,7 +180,7 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
         ready
         and tools["rawtherapee"].available
         and tools["rawtherapee"].version == SUPPORTED_RAWTHERAPEE_VERSION
-        and profiles["raw_development_pp3"]["available"] is True
+        and profiles["raw_development_pp3"]["matches_expected"] is True
         and profiles["rawtherapee_output"]["available"] is True
         and camera_resources["ready"]
         and lensfun_database["ready"]

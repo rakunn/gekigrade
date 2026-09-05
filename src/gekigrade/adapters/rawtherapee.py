@@ -20,6 +20,9 @@ from gekigrade.domain.jsonio import write_json
 RAWTHERAPEE_CLI = Path("/Applications/RawTherapee.app/Contents/MacOS/rawtherapee-cli")
 SUPPORTED_RAWTHERAPEE_VERSION = "5.13"
 DEFAULT_RAW_PROFILE = Path(__file__).parent.parent / "raw_profiles/neutral-v1.pp3"
+EXPECTED_DEFAULT_RAW_PROFILE_SHA256 = (
+    "514d46ae454b127728fb6a9f81791c605f4bb9614de934fcb0c9b86becd5c817"
+)
 LENSFUN_DATABASE = Path("/Applications/RawTherapee.app/Contents/Resources/share/lensfun")
 RAWTHERAPEE_OUTPUT_PROFILE = Path(
     "/Applications/RawTherapee.app/Contents/Resources/share/iccprofiles/output/RTv4_Large.icc"

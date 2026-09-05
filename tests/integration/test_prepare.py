@@ -365,6 +365,24 @@ def test_prepare_does_not_expose_a_raw_profile_override() -> None:
     assert "raw_output_profile" not in inspect.signature(prepare_job).parameters
 
 
+def test_prepare_rejects_a_modified_shipped_raw_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    modified_profile = tmp_path / "modified-neutral.pp3"
+    modified_profile.write_text("[Version]\nAppVersion=5.13\n", encoding="utf-8")
+    monkeypatch.setattr(prepare_module, "DEFAULT_RAW_PROFILE", modified_profile)
+
+    with pytest.raises(RawTherapeeError, match="shipped RAW development profile"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job").exists()
+
+
 @pytest.mark.parametrize("orientation", [2, 3, 4, 5, 6, 7, 8])
 def test_prepare_rejects_raw_orientations_without_a_fully_verifiable_transform(
     tmp_path: Path, orientation: int

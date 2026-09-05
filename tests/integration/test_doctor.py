@@ -32,12 +32,29 @@ def test_doctor_reports_raw_adapter_separately_from_jpeg_readiness() -> None:
     assert report["tools"]["rawtherapee"]["available"] is True
     assert report["tools"]["rawtherapee"]["version"] == "5.13"
     assert report["profiles"]["raw_development_pp3"]["sha256"]
+    assert report["profiles"]["raw_development_pp3"]["matches_expected"] is True
     assert report["profiles"]["rawtherapee_output"]["sha256"]
     assert report["profiles"]["lensfun_database"]["sha256"]
     assert report["profiles"]["lensfun_database"]["ready"] is True
     assert report["profiles"]["rawtherapee_camera_resources"]["ready"] is True
     assert report["ready_for_raw"] is True
     assert report["raw_status"] == "adapter-ready"
+
+
+def test_doctor_rejects_a_modified_shipped_raw_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    modified_profile = tmp_path / "modified-neutral.pp3"
+    modified_profile.write_text("[Version]\nAppVersion=5.13\n", encoding="utf-8")
+    monkeypatch.setattr(doctor_module, "DEFAULT_RAW_PROFILE", modified_profile)
+
+    report = build_doctor_report(run_color_probe=False)
+
+    status = report["profiles"]["raw_development_pp3"]
+    assert status["available"] is True
+    assert status["matches_expected"] is False
+    assert report["ready_for_raw"] is False
+    assert report["raw_status"] == "not-ready"
 
 
 def test_doctor_does_not_mark_an_unpinned_rawtherapee_version_ready(

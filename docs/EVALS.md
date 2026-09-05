@@ -20,7 +20,7 @@
 - Each ImageMagick adapter result contains the SHA-256 of a regular, non-symlink, identity-stable output; working-TIFF and preview validation must reproduce that exact invocation-bound hash.
 - RawTherapee camera-input provenance records the selected DCP or ICC profile, or the camera-matrix fallback, together with camera-alias and camera-constants hashes; the resource fingerprint must remain unchanged during development.
 - RawTherapee executable version and file hash are captured before launch and must remain unchanged after exit.
-- RAW preparation rejects a caller-supplied PP3, and the version captured at the launch boundary must equal the supported 5.13 release.
+- RAW preparation rejects a caller-supplied PP3, requires the shipped profile to match its pinned digest before creating a job, and requires the execution copy to retain that identity. Doctor reports RAW ready only for the same known profile. The version captured at the launch boundary must equal the supported 5.13 release.
 - Source format detection rejects symlinks and non-regular files before reading signature bytes; the copied PP3 hash must remain unchanged across RAW execution.
 - Lensfun inspection is derived from the selected RawTherapee bundle, searches and fingerprints every bundled XML file including third-party lens files, requires overlapping camera and lens mounts, and keeps the aggregate fingerprint unchanged during development.
 - Lensfun matching includes ExifTool's lens maker when present. If maker metadata is absent and the same normalized model/mount appears under multiple makers, or multiple fully matching entries remain after maker filtering, the match is reported as ambiguous rather than selecting the first entry.

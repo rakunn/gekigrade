@@ -19,6 +19,7 @@ from gekigrade.adapters.imagemagick import (
 )
 from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
+    EXPECTED_DEFAULT_RAW_PROFILE_SHA256,
     RAWTHERAPEE_CLI,
     RawTherapeeError,
     develop_raw,
@@ -481,6 +482,12 @@ def prepare_job(
         raise ValueError("unsupported source format; expected JPEG or Sony ARW")
     source_format = source["format"]
     inspected_oriented_dimensions = dict(source["oriented_dimensions"])
+    if source_format == "ARW" and (
+        DEFAULT_RAW_PROFILE.is_symlink()
+        or not DEFAULT_RAW_PROFILE.is_file()
+        or sha256_file(DEFAULT_RAW_PROFILE) != EXPECTED_DEFAULT_RAW_PROFILE_SHA256
+    ):
+        raise RawTherapeeError("shipped RAW development profile does not match its pinned identity")
     job = create_job_directory(source_path, output_path)
     working = job / "intermediate/working.tif"
     preview = job / "preview.jpg"
@@ -514,6 +521,8 @@ def prepare_job(
             profile=DEFAULT_RAW_PROFILE,
             executable=rawtherapee_executable,
         )
+        if result.profile_sha256 != EXPECTED_DEFAULT_RAW_PROFILE_SHA256:
+            raise RawTherapeeError("shipped RAW development profile changed before execution")
         if result.source_sha256 != source["source_sha256"]:
             raise RawTherapeeError("source RAW changed after inspection")
         if (

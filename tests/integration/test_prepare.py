@@ -82,6 +82,10 @@ def _raw_test_dependencies(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 import json
 import sys
 
+if sys.argv[1:] == ["-ver"]:
+    print("13.55")
+    raise SystemExit
+
 print(json.dumps([{
     "SourceFile": sys.argv[-1],
     "FileType": "ARW",
@@ -260,6 +264,13 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     assert metadata["stored_dimensions"] == {"width": 180, "height": 120}
     assert metadata["oriented_dimensions"] == {"width": 180, "height": 120}
     assert metadata["capture_metadata"]["Model"] == "ILCE-TEST"
+    metadata_reader = metadata["metadata_reader"]
+    assert metadata_reader == {
+        "name": "ExifTool",
+        "path": str(exiftool.resolve()),
+        "version": "13.55",
+        "executable_sha256": _sha256(exiftool),
+    }
     development = metadata["raw_development"]
     assert development["engine"] == "RawTherapee"
     assert development["profile_sha256"] == _sha256(DEFAULT_RAW_PROFILE)
@@ -434,6 +445,10 @@ import json
 import pathlib
 import sys
 
+if sys.argv[1:] == ["-ver"]:
+    print("13.55")
+    raise SystemExit
+
 path = pathlib.Path(sys.argv[-1])
 metadata = {
     "SourceFile": str(path),
@@ -452,4 +467,37 @@ print(json.dumps([metadata]))
     )
 
     with pytest.raises(ValueError, match="changed during metadata inspection"):
+        inspect_photo(source, exiftool_executable=exiftool)
+
+
+def test_inspect_rejects_an_exiftool_binary_changed_during_metadata_read(tmp_path: Path) -> None:
+    source, _, _, _ = _raw_test_dependencies(tmp_path)
+    exiftool = _write_executable(
+        tmp_path / "mutating-exiftool",
+        """#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+
+if sys.argv[1:] == ["-ver"]:
+    print("13.55")
+    raise SystemExit
+
+metadata = {
+    "SourceFile": sys.argv[-1],
+    "FileType": "ARW",
+    "MIMEType": "image/x-sony-arw",
+    "ImageWidth": 180,
+    "ImageHeight": 120,
+    "Orientation": 1,
+    "Make": "SONY",
+    "Model": "ILCE-TEST"
+}
+with pathlib.Path(__file__).open("a", encoding="utf-8") as stream:
+    stream.write("\\n# changed during metadata read\\n")
+print(json.dumps([metadata]))
+""",
+    )
+
+    with pytest.raises(RuntimeError, match="ExifTool executable changed during metadata"):
         inspect_photo(source, exiftool_executable=exiftool)

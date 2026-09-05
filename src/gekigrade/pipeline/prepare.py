@@ -62,7 +62,7 @@ def _inspect_jpeg(
     oriented_width, oriented_height = (
         (height, width) if orientation in {5, 6, 7, 8} else (width, height)
     )
-    metadata = _read_exiftool(path, executable=exiftool_executable)
+    metadata, metadata_reader = _read_exiftool(path, executable=exiftool_executable)
     result = {
         "schema_version": "1.0.0",
         "source_path": str(path.resolve()),
@@ -78,6 +78,7 @@ def _inspect_jpeg(
             "assumption": None if profile else "untagged RGB JPEG is interpreted as sRGB",
         },
         "capture_metadata": metadata,
+        "metadata_reader": metadata_reader,
         "warnings": [] if profile else ["JPEG has no embedded ICC profile; sRGB was assumed"],
     }
     return result, profile
@@ -88,12 +89,41 @@ def inspect_jpeg(path: Path) -> dict[str, Any]:
     return result
 
 
-def _read_exiftool(path: Path, *, executable: Path = EXIFTOOL) -> dict[str, Any]:
+def _exiftool_identity(executable: Path) -> dict[str, str]:
     if not executable.is_file() or executable.stat().st_mode & 0o111 == 0:
         raise RuntimeError("ExifTool is unavailable; run `geki doctor`")
+    resolved = executable.resolve(strict=True)
+    executable_sha256 = sha256_file(resolved)
+    version_result = subprocess.run(
+        [str(resolved), "-ver"],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=15,
+        stdin=subprocess.DEVNULL,
+    )
+    if version_result.returncode != 0:
+        raise RuntimeError(f"ExifTool version check failed: {version_result.stderr.strip()}")
+    version = version_result.stdout.strip()
+    if not version:
+        raise RuntimeError("ExifTool version check returned no version")
+    if sha256_file(resolved) != executable_sha256:
+        raise RuntimeError("ExifTool executable changed during version inspection")
+    return {
+        "name": "ExifTool",
+        "path": str(resolved),
+        "version": version,
+        "executable_sha256": executable_sha256,
+    }
+
+
+def _read_exiftool(
+    path: Path, *, executable: Path = EXIFTOOL
+) -> tuple[dict[str, Any], dict[str, str]]:
+    identity = _exiftool_identity(executable)
     result = subprocess.run(
         [
-            str(executable),
+            identity["path"],
             "-json",
             "-n",
             "-FileType",
@@ -119,12 +149,14 @@ def _read_exiftool(path: Path, *, executable: Path = EXIFTOOL) -> dict[str, Any]
     )
     if result.returncode != 0:
         raise RuntimeError(f"ExifTool failed: {result.stderr.strip()}")
+    if _exiftool_identity(Path(identity["path"])) != identity:
+        raise RuntimeError("ExifTool executable changed during metadata inspection")
     records: object = json.loads(result.stdout)
     if not isinstance(records, list) or not records or not isinstance(records[0], dict):
-        return {}
+        return {}, identity
     record = cast(dict[str, Any], records[0])
     record.pop("SourceFile", None)
-    return record
+    return record, identity
 
 
 def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[str, Any]:
@@ -136,7 +168,7 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
         if stream.read(4) not in {b"II*\x00", b"MM\x00*"}:
             raise ValueError("source does not have a TIFF-based RAW signature")
     source_sha256 = sha256_file(path)
-    metadata = _read_exiftool(path, executable=exiftool_executable)
+    metadata, metadata_reader = _read_exiftool(path, executable=exiftool_executable)
     if sha256_file(path) != source_sha256:
         raise ValueError("source ARW changed during metadata inspection")
     if metadata.get("FileType") != "ARW" or metadata.get("MIMEType") != "image/x-sony-arw":
@@ -179,6 +211,7 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
             "assumption": "camera RAW is developed through the pinned RawTherapee profile",
         },
         "capture_metadata": {key: metadata[key] for key in capture_keys if key in metadata},
+        "metadata_reader": metadata_reader,
         "warnings": [],
     }
 

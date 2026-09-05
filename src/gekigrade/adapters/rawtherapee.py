@@ -171,6 +171,71 @@ def _load_camera_aliases(path: Path) -> dict[str, list[str]]:
     return aliases
 
 
+def _strip_json_comments(value: str) -> str:
+    result: list[str] = []
+    index = 0
+    in_string = False
+    escaped = False
+    while index < len(value):
+        character = value[index]
+        if in_string:
+            result.append(character)
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            index += 1
+            continue
+        if character == '"':
+            in_string = True
+            result.append(character)
+            index += 1
+            continue
+        next_character = value[index + 1] if index + 1 < len(value) else ""
+        if character == "/" and next_character == "/":
+            result.extend((" ", " "))
+            index += 2
+            while index < len(value) and value[index] not in "\r\n":
+                result.append(" ")
+                index += 1
+            continue
+        if character == "/" and next_character == "*":
+            result.extend((" ", " "))
+            index += 2
+            while index + 1 < len(value) and value[index : index + 2] != "*/":
+                result.append(value[index] if value[index] in "\r\n" else " ")
+                index += 1
+            if index + 1 >= len(value):
+                raise RawTherapeeError(
+                    "RawTherapee camera constants contain an unterminated comment"
+                )
+            result.extend((" ", " "))
+            index += 2
+            continue
+        result.append(character)
+        index += 1
+    return "".join(result)
+
+
+def _load_camera_constants(path: Path) -> list[dict[object, object]]:
+    if path.is_symlink() or not path.is_file():
+        raise RawTherapeeError(f"RawTherapee camera constants are unavailable: {path}")
+    try:
+        value = json.loads(_strip_json_comments(path.read_text(encoding="utf-8")))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RawTherapeeError(f"RawTherapee camera constants cannot be parsed: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RawTherapeeError("RawTherapee camera constants must be a JSON object")
+    constants = value.get("camera_constants")
+    if not isinstance(constants, list) or not all(isinstance(item, dict) for item in constants):
+        raise RawTherapeeError(
+            "RawTherapee camera constants must contain a camera_constants object list"
+        )
+    return constants
+
+
 def inspect_camera_resources(*, executable: Path = RAWTHERAPEE_CLI) -> CameraResourceStatus:
     try:
         dcp_directory, icc_directory, aliases_path, camera_constants_path = _camera_resource_paths(
@@ -211,10 +276,7 @@ def inspect_camera_resources(*, executable: Path = RAWTHERAPEE_CLI) -> CameraRes
     base["available"] = aliases_path.is_file() and camera_constants_path.is_file()
     try:
         _load_camera_aliases(aliases_path)
-        if camera_constants_path.is_symlink() or not camera_constants_path.is_file():
-            raise RawTherapeeError(
-                f"RawTherapee camera constants are unavailable: {camera_constants_path}"
-            )
+        _load_camera_constants(camera_constants_path)
         base["aliases_sha256"] = _sha256(aliases_path)
         base["camera_constants_sha256"] = _sha256(camera_constants_path)
     except (OSError, RawTherapeeError) as exc:
@@ -241,10 +303,7 @@ def inspect_camera_input_profile(
     ):
         raise RawTherapeeError("RawTherapee camera profile directories are unavailable")
     aliases = _load_camera_aliases(aliases_path)
-    if camera_constants_path.is_symlink() or not camera_constants_path.is_file():
-        raise RawTherapeeError(
-            f"RawTherapee camera constants are unavailable: {camera_constants_path}"
-        )
+    _load_camera_constants(camera_constants_path)
     profile_key = camera_make_model
     wanted = camera_make_model.casefold()
     for canonical, alias_values in aliases.items():

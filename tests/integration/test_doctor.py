@@ -82,3 +82,28 @@ def test_doctor_requires_parseable_camera_resources(
     assert report["profiles"]["rawtherapee_camera_resources"]["ready"] is False
     assert "aliases" in report["profiles"]["rawtherapee_camera_resources"]["error"]
     assert report["ready_for_raw"] is False
+
+
+def test_doctor_rejects_malformed_camera_constants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "RawTherapee.app/Contents/MacOS/rawtherapee-cli"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    plist = executable.parent.parent / "Info.plist"
+    plist.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "5.13"}))
+    resources = executable.parent.parent / "Resources/share"
+    dcp_directory = resources / "dcpprofiles"
+    dcp_directory.mkdir(parents=True)
+    (dcp_directory / "camera_model_aliases.json").write_text("{}\n", encoding="utf-8")
+    (resources / "iccprofiles/input").mkdir(parents=True)
+    (resources / "camconst.json").write_text("not-json", encoding="utf-8")
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_CLI", executable)
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_PLIST", plist)
+
+    report = build_doctor_report(run_color_probe=False)
+
+    assert report["profiles"]["rawtherapee_camera_resources"]["ready"] is False
+    assert "camera constants" in report["profiles"]["rawtherapee_camera_resources"]["error"]
+    assert report["ready_for_raw"] is False

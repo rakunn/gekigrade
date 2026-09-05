@@ -12,14 +12,14 @@
 - Repeated RAW developments use fresh isolated settings/cache directories and require zero decoded-pixel differences under the same fingerprint; container hashes may differ when the external engine writes timestamps.
 - RAW output must be exactly three-channel RGB with 16-bit samples, profile-tagged, correctly oriented, and admitted to ACEScg only after the intermediate profile is verified.
 - The developed TIFF hash must match the recorded RawTherapee output before profile inspection and immediately before and after normalization.
-- RAW metadata inspection hashes the source before ExifTool and rejects any change detected immediately afterward.
+- RAW metadata inspection hashes the source before ExifTool and rejects any change detected immediately afterward. It records the exact resolved ExifTool path, version, and executable hash and rejects a binary change during extraction.
 - RawTherapee camera-input provenance records the selected DCP or ICC profile, or the camera-matrix fallback, together with camera-alias and camera-constants hashes; the resource fingerprint must remain unchanged during development.
 - RawTherapee executable version and file hash are captured before launch and must remain unchanged after exit.
 - RAW preparation rejects a caller-supplied PP3, and the version captured at the launch boundary must equal the supported 5.13 release.
 - Source format detection rejects symlinks and non-regular files before reading signature bytes; the copied PP3 hash must remain unchanged across RAW execution.
 - Lensfun inspection is derived from the selected RawTherapee bundle, searches and fingerprints every bundled XML file including third-party lens files, requires overlapping camera and lens mounts, and keeps the aggregate fingerprint unchanged during development.
 - Lensfun camera/lens database matches and actual-application confirmation are separate fields; absent CLI confirmation must remain false.
-- RAW doctor readiness requires present camera-profile directories, a parseable alias map, camera constants, and a complete parseable Lensfun XML set.
+- RAW doctor readiness requires present camera-profile directories, a parseable alias map, structurally valid RawTherapee JSON-with-comments camera constants, and a complete parseable Lensfun XML set.
 - A final RAW source check precedes the prepared manifest; a source change during manifest publication removes the manifest and fails the job.
 - Cross-platform decoded 8-bit output allows maximum channel difference 1 and RMSE 0.25; file-byte equality is not promised across encoders.
 - Manifest records source, schema, plan, recipe, tool, profile, intermediate, candidate, selection, master, and derivative provenance.

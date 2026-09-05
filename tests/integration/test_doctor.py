@@ -227,6 +227,28 @@ def test_doctor_rejects_a_symlinked_rawtherapee_path_ancestor(
     assert report["raw_status"] == "not-ready"
 
 
+def test_doctor_rejects_a_symlink_anywhere_in_the_rawtherapee_bundle(
+    tmp_path: Path,
+) -> None:
+    executable = _write_ready_rawtherapee_bundle(
+        tmp_path,
+        output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
+    )
+    external = tmp_path / "external-resource"
+    external.write_text("external", encoding="utf-8")
+    unrelated = executable.parents[2] / "Contents/Resources/unrelated-link"
+    unrelated.symlink_to(external)
+
+    report = build_doctor_report(
+        run_color_probe=False,
+        rawtherapee_executable=executable,
+    )
+
+    assert report["tools"]["rawtherapee"]["available"] is False
+    assert report["ready_for_raw"] is False
+    assert report["raw_status"] == "not-ready"
+
+
 def test_doctor_does_not_substitute_path_tools_for_prepare_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

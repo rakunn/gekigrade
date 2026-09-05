@@ -129,6 +129,14 @@ def path_has_symlink(path: Path) -> bool:
         current = parent
 
 
+def rawtherapee_bundle_has_symlink(executable: Path) -> bool:
+    try:
+        bundle = executable.parents[2]
+        return bundle.is_symlink() or any(path.is_symlink() for path in bundle.rglob("*"))
+    except (IndexError, OSError):
+        return True
+
+
 def _stable_source_sha256(path: Path) -> str | None:
     flags = os.O_RDONLY | os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
@@ -211,7 +219,7 @@ def _write_run_report(report_path: Path, report: Mapping[str, object], target: P
 
 def _snapshot_runtime_bundle(executable: Path) -> tuple[Path, Path, str]:
     bundle = executable.parents[2]
-    if any(path.is_symlink() for path in bundle.rglob("*")):
+    if rawtherapee_bundle_has_symlink(executable):
         raise RawTherapeeError("RawTherapee application bundle contains symlinks")
     runtime_root = Path(
         tempfile.mkdtemp(prefix="gekigrade-rawtherapee-runtime-", dir="/private/tmp")
@@ -237,13 +245,24 @@ def _snapshot_runtime_bundle(executable: Path) -> tuple[Path, Path, str]:
     if completed.returncode != 0:
         clone = runtime_root / f"copy-{bundle.name}"
         try:
-            shutil.copytree(bundle, clone)
-        except (OSError, shutil.Error) as exc:
+            copied = subprocess.run(
+                ["/bin/cp", "-R", str(bundle), str(clone)],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=120,
+                stdin=subprocess.DEVNULL,
+                env={"LC_ALL": "C", "PATH": "/bin:/usr/bin"},
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
             shutil.rmtree(runtime_root, ignore_errors=True)
-            detail = completed.stderr.strip() or str(exc)
             raise RawTherapeeError(
-                f"RawTherapee runtime bundle could not be snapshotted: {detail}"
+                f"RawTherapee runtime bundle could not be snapshotted: {exc}"
             ) from exc
+        if copied.returncode != 0:
+            shutil.rmtree(runtime_root, ignore_errors=True)
+            detail = copied.stderr.strip() or completed.stderr.strip() or "copy failed"
+            raise RawTherapeeError(f"RawTherapee runtime bundle could not be snapshotted: {detail}")
         strategy = "full-copy"
     runtime_executable = clone / relative_executable
     if (

@@ -5,6 +5,8 @@ import json
 import os
 import plistlib
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -194,7 +196,7 @@ shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1])
     assert not target.exists()
 
 
-def test_develop_raw_does_not_follow_a_raced_run_report_temporary_symlink(
+def test_develop_raw_ignores_an_abandoned_fixed_run_report_temporary_symlink(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "photo.arw"
@@ -221,17 +223,52 @@ shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1])
     work = tmp_path / "rawtherapee"
     target = work / "developed.tif"
 
-    with pytest.raises(RawTherapeeError, match="run report"):
-        develop_raw(
-            source,
-            target,
-            work_directory=work,
-            profile=profile,
-            executable=executable,
-        )
+    result = develop_raw(
+        source,
+        target,
+        work_directory=work,
+        profile=profile,
+        executable=executable,
+    )
 
     assert source.read_bytes() == source_before
-    assert not target.exists()
+    assert target.exists()
+    assert result.report_path == work / "run.json"
+    assert (work / "run.json.tmp").is_symlink()
+
+
+def test_rawtherapee_full_copy_fallback_has_a_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        "#!/bin/sh\nexit 0\n",
+    )
+    runtime_root = tmp_path / "runtime"
+    observed_commands: list[list[str]] = []
+
+    def make_runtime_root(*, prefix: str, dir: str) -> str:
+        assert prefix == "gekigrade-rawtherapee-runtime-"
+        assert dir == "/private/tmp"
+        runtime_root.mkdir()
+        return str(runtime_root)
+
+    def time_out_fallback(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        observed_commands.append(command)
+        assert kwargs["timeout"] == 120
+        if command[1] == "-cR":
+            return subprocess.CompletedProcess(command, 1, "", "clone unavailable")
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(tempfile, "mkdtemp", make_runtime_root)
+    monkeypatch.setattr(subprocess, "run", time_out_fallback)
+
+    with pytest.raises(RawTherapeeError, match="could not be snapshotted"):
+        rawtherapee_module._snapshot_runtime_bundle(executable)
+
+    assert [command[1] for command in observed_commands] == ["-cR", "-R"]
+    assert not runtime_root.exists()
 
 
 def test_develop_raw_does_not_authorize_overwriting_a_raced_output_symlink(

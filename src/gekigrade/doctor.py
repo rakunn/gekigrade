@@ -29,6 +29,7 @@ from gekigrade.adapters.rawtherapee import (
     inspect_lensfun_database,
     lensfun_database_for_executable,
     path_has_symlink,
+    rawtherapee_bundle_has_symlink,
     rawtherapee_output_profile_for_executable,
 )
 from gekigrade.adapters.tools import ExternalTool, ToolStatus, inspect_tool
@@ -130,7 +131,7 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
 
 
 def _rawtherapee_status(*, executable: Path, plist: Path) -> ToolStatus:
-    if path_has_symlink(executable):
+    if path_has_symlink(executable) or rawtherapee_bundle_has_symlink(executable):
         return ToolStatus(
             name="rawtherapee",
             available=False,

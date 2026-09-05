@@ -13,7 +13,7 @@
 - RAW output must be exactly three-channel RGB with 16-bit samples, profile-tagged, correctly oriented, and admitted to ACEScg only after the intermediate profile is verified.
 - RawTherapee output structure and its recorded SHA-256 must come from one open file descriptor whose identity remains stable through validation; replacing the path during validation fails the job and removes the output.
 - The developed TIFF hash must match the recorded RawTherapee output before profile inspection and immediately before and after normalization.
-- RAW metadata inspection hashes the source before ExifTool and rejects any change detected immediately afterward. It records the exact resolved ExifTool path, version, and executable hash and rejects a binary change during extraction.
+- RAW metadata inspection copies the source into a transient read-only, identity-stable snapshot with the validated digest and invokes ExifTool only on that snapshot. Both snapshot and original are revalidated afterward, including temporary original-path replacement tests. It records the exact resolved ExifTool path, version, and executable hash and rejects a binary change during extraction.
 - JPEG and RAW normalization plus preview encoding record the exact resolved ImageMagick path, version, and executable hash for each operation; a binary change during an operation is rejected.
 - ImageMagick receives private ICC snapshots whose hashes remain stable across the command. A changed snapshot or source system profile rejects and removes the produced artifact.
 - ImageMagick receives only the recorded allowlisted environment with fixed locale, system path, and single-thread ImageMagick/OpenMP settings; caller configuration and module paths do not cross the subprocess boundary.

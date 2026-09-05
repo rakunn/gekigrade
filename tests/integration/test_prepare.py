@@ -1222,7 +1222,7 @@ def test_inspect_rejects_a_raw_source_changed_during_metadata_read(tmp_path: Pat
     source, _, _, _ = _raw_test_dependencies(tmp_path)
     exiftool = _write_executable(
         tmp_path / "mutating-exiftool",
-        """#!/usr/bin/env python3
+        f"""#!/usr/bin/env python3
 import json
 import pathlib
 import sys
@@ -1232,7 +1232,7 @@ if sys.argv[1:] == ["-config", "", "-ver"]:
     raise SystemExit
 
 path = pathlib.Path(sys.argv[-1])
-metadata = {
+metadata = {{
     "SourceFile": str(path),
     "FileType": "ARW",
     "MIMEType": "image/x-sony-arw",
@@ -1241,8 +1241,8 @@ metadata = {
     "Orientation": 1,
     "Make": "SONY",
     "Model": "ILCE-TEST"
-}
-with path.open("ab") as stream:
+}}
+with pathlib.Path({str(source)!r}).open("ab") as stream:
     stream.write(b"changed-during-exiftool")
 print(json.dumps([metadata]))
 """,
@@ -1270,6 +1270,7 @@ if sys.argv[1:] == ["-config", "", "-ver"]:
     raise SystemExit
 
 path = pathlib.Path(sys.argv[-1])
+original = pathlib.Path({str(source)!r})
 metadata = {{
     "SourceFile": str(path),
     "FileType": "ARW",
@@ -1280,8 +1281,8 @@ metadata = {{
     "Make": "SONY",
     "Model": "ILCE-TEST"
 }}
-path.unlink()
-path.symlink_to(pathlib.Path({str(replacement)!r}))
+original.unlink()
+original.symlink_to(pathlib.Path({str(replacement)!r}))
 print(json.dumps([metadata]))
 """,
     )
@@ -1289,6 +1290,53 @@ print(json.dumps([metadata]))
     with pytest.raises(ValueError, match="changed during metadata inspection"):
         inspect_photo(source, exiftool_executable=exiftool)
     assert source.is_symlink()
+
+
+def test_inspect_reads_raw_metadata_from_an_identity_bound_snapshot(tmp_path: Path) -> None:
+    source, _, _, _ = _raw_test_dependencies(tmp_path)
+    replacement = tmp_path / "replacement.ARW"
+    replacement.write_bytes(source.read_bytes() + b"replacement-marker")
+    source_before = source.read_bytes()
+    exiftool = _write_executable(
+        tmp_path / "swapping-exiftool",
+        f"""#!/usr/bin/env python3
+import json
+import pathlib
+import shutil
+import sys
+
+if sys.argv[1:] == ["-config", "", "-ver"]:
+    print("13.55")
+    raise SystemExit
+
+original = pathlib.Path({str(source)!r})
+replacement = pathlib.Path({str(replacement)!r})
+backup = original.with_suffix(".backup")
+original.rename(backup)
+try:
+    shutil.copyfile(replacement, original)
+    inspected = pathlib.Path(sys.argv[-1])
+    model = "REPLACEMENT" if inspected.read_bytes() == replacement.read_bytes() else "ILCE-TEST"
+    print(json.dumps([{{
+        "SourceFile": str(inspected),
+        "FileType": "ARW",
+        "MIMEType": "image/x-sony-arw",
+        "ImageWidth": 180,
+        "ImageHeight": 120,
+        "Orientation": 1,
+        "Make": "SONY",
+        "Model": model
+    }}]))
+finally:
+    original.unlink(missing_ok=True)
+    backup.rename(original)
+""",
+    )
+
+    metadata = inspect_photo(source, exiftool_executable=exiftool)
+
+    assert metadata["capture_metadata"]["Model"] == "ILCE-TEST"
+    assert source.read_bytes() == source_before
 
 
 def test_inspect_rejects_an_exiftool_binary_changed_during_metadata_read(tmp_path: Path) -> None:

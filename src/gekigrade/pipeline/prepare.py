@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
@@ -200,10 +201,22 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
     source_sha256, source_size = source_snapshot
     if source_size > MAX_SOURCE_BYTES:
         raise ValueError("ARW exceeds the 1 GiB safety limit")
-    metadata, metadata_reader = _read_exiftool(path, executable=exiftool_executable)
-    after_metadata = _stable_regular_file_snapshot(path)
-    if after_metadata is None or after_metadata[0] != source_sha256:
-        raise ValueError("source ARW changed during metadata inspection")
+    recorded_source_path = str(path.absolute())
+    with tempfile.TemporaryDirectory(prefix="gekigrade-raw-metadata-") as directory:
+        metadata_snapshot = Path(directory) / f"source-snapshot{path.suffix}"
+        _copy_raw_metadata_snapshot(path, metadata_snapshot, source_sha256)
+        metadata, metadata_reader = _read_exiftool(
+            metadata_snapshot, executable=exiftool_executable
+        )
+        after_snapshot = _stable_regular_file_snapshot(metadata_snapshot)
+        after_metadata = _stable_regular_file_snapshot(path)
+        if (
+            after_snapshot is None
+            or after_snapshot[0] != source_sha256
+            or after_metadata is None
+            or after_metadata[0] != source_sha256
+        ):
+            raise ValueError("source ARW changed during metadata inspection")
     if metadata.get("FileType") != "ARW" or metadata.get("MIMEType") != "image/x-sony-arw":
         raise ValueError("source metadata does not identify a Sony ARW")
     try:
@@ -237,7 +250,7 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
     )
     return {
         "schema_version": "1.0.0",
-        "source_path": str(path.resolve()),
+        "source_path": recorded_source_path,
         "source_sha256": source_sha256,
         "format": "ARW",
         "stored_dimensions": {"width": width, "height": height},
@@ -434,6 +447,56 @@ def _stable_regular_file_snapshot(path: Path) -> tuple[str, int] | None:
     ):
         return None
     return actual_sha256, opened_status.st_size
+
+
+def _copy_raw_metadata_snapshot(source: Path, target: Path, expected_sha256: str) -> None:
+    source_flags = os.O_RDONLY | os.O_NONBLOCK
+    target_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        source_flags |= os.O_NOFOLLOW
+        target_flags |= os.O_NOFOLLOW
+    try:
+        source_descriptor = os.open(source, source_flags)
+    except OSError as exc:
+        raise ValueError("source ARW could not be opened for metadata inspection") from exc
+    try:
+        target_descriptor = os.open(target, target_flags, 0o600)
+    except OSError as exc:
+        os.close(source_descriptor)
+        raise ValueError("RAW metadata snapshot could not be created safely") from exc
+    try:
+        with (
+            os.fdopen(source_descriptor, "rb") as source_stream,
+            os.fdopen(target_descriptor, "wb") as target_stream,
+        ):
+            opened_status = os.fstat(source_stream.fileno())
+            opened_identity = _file_identity(opened_status)
+            if not stat.S_ISREG(opened_status.st_mode):
+                raise ValueError("source ARW is not a regular file")
+            if opened_status.st_size > MAX_SOURCE_BYTES:
+                raise ValueError("ARW exceeds the 1 GiB safety limit")
+            digest = hashlib.sha256()
+            for block in iter(lambda: source_stream.read(1024 * 1024), b""):
+                digest.update(block)
+                target_stream.write(block)
+            target_stream.flush()
+            os.fsync(target_stream.fileno())
+            os.fchmod(target_stream.fileno(), 0o400)
+            closed_identity = _file_identity(os.fstat(source_stream.fileno()))
+        source_path_status = source.lstat()
+        if (
+            not stat.S_ISREG(source_path_status.st_mode)
+            or opened_identity != closed_identity
+            or _file_identity(source_path_status) != opened_identity
+            or digest.hexdigest() != expected_sha256
+        ):
+            raise ValueError("source ARW changed while its metadata snapshot was created")
+        snapshot = _stable_regular_file_snapshot(target)
+        if snapshot is None or snapshot != (expected_sha256, opened_status.st_size):
+            raise ValueError("RAW metadata snapshot is not identity-stable")
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
 
 
 def _raw_source_matches(path: Path, expected_sha256: str) -> bool:

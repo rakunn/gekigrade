@@ -151,6 +151,50 @@ def _stable_source_sha256(path: Path) -> str | None:
     return digest
 
 
+def _copy_profile_exclusive(source: Path, destination: Path) -> str:
+    source_flags = os.O_RDONLY | os.O_NONBLOCK
+    destination_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        source_flags |= os.O_NOFOLLOW
+        destination_flags |= os.O_NOFOLLOW
+    try:
+        source_descriptor = os.open(source, source_flags)
+    except OSError as exc:
+        raise RawTherapeeError("RAW development profile could not be opened safely") from exc
+    try:
+        destination_descriptor = os.open(destination, destination_flags, 0o600)
+    except OSError as exc:
+        os.close(source_descriptor)
+        raise RawTherapeeError(
+            "RAW development profile destination could not be created safely"
+        ) from exc
+    try:
+        with (
+            os.fdopen(source_descriptor, "rb") as source_stream,
+            os.fdopen(destination_descriptor, "wb") as destination_stream,
+        ):
+            opened_status = os.fstat(source_stream.fileno())
+            opened_identity = _file_identity(opened_status)
+            if not stat.S_ISREG(opened_status.st_mode):
+                raise RawTherapeeError("RAW development profile is not a regular file")
+            shutil.copyfileobj(source_stream, destination_stream)
+            source_identity_after = _file_identity(os.fstat(source_stream.fileno()))
+        source_path_status = source.lstat()
+        if (
+            not stat.S_ISREG(source_path_status.st_mode)
+            or opened_identity != source_identity_after
+            or _file_identity(source_path_status) != opened_identity
+        ):
+            raise RawTherapeeError("RAW development profile changed while it was copied")
+        copied_sha256 = _stable_source_sha256(destination)
+        if copied_sha256 is None:
+            raise RawTherapeeError("copied RAW development profile is not a stable regular file")
+        return copied_sha256
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+
+
 def _validate_developed_tiff(target: Path) -> str:
     if target.is_symlink() or not target.is_file():
         raise RawTherapeeError("RawTherapee did not create a regular, non-symlink TIFF")
@@ -638,8 +682,7 @@ def develop_raw(
     cache.mkdir()
     temporary.mkdir()
     copied_profile = work_directory / "development.pp3"
-    shutil.copyfile(profile, copied_profile)
-    profile_sha256 = _sha256(copied_profile)
+    profile_sha256 = _copy_profile_exclusive(profile, copied_profile)
     target.parent.mkdir(parents=True, exist_ok=True)
 
     arguments = [
@@ -702,10 +745,7 @@ def develop_raw(
         executable_sha256_after = _sha256(executable)
     except OSError:
         executable_sha256_after = None
-    try:
-        profile_sha256_after = _sha256(copied_profile)
-    except OSError:
-        profile_sha256_after = None
+    profile_sha256_after = _stable_source_sha256(copied_profile)
     report_path = work_directory / "run.json"
     report = {
         "schema_version": "1.0.0",

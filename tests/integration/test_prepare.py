@@ -854,6 +854,47 @@ def test_prepare_removes_manifest_if_raw_resources_change_while_published(
     assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
+def test_prepare_removes_manifest_if_camera_revalidation_raises_after_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    aliases = rawtherapee.parent.parent / "Resources/share/dcpprofiles/camera_model_aliases.json"
+    original_manifest = prepare_module._artifact_manifest
+    original_camera_inspection = cast(Any, prepare_module).inspect_camera_input_profile
+    manifest_built = False
+
+    def mark_manifest_built(
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
+    ) -> dict[str, object]:
+        nonlocal manifest_built
+        manifest = original_manifest(job, metadata, **profile_hashes)
+        manifest_built = True
+        return manifest
+
+    def remove_aliases_before_post_publication_inspection(
+        capture_metadata: dict[str, object], *, executable: Path
+    ) -> Any:
+        if manifest_built:
+            aliases.unlink(missing_ok=True)
+        return original_camera_inspection(capture_metadata, executable=executable)
+
+    monkeypatch.setattr(prepare_module, "_artifact_manifest", mark_manifest_built)
+    monkeypatch.setattr(
+        prepare_module,
+        "inspect_camera_input_profile",
+        remove_aliases_before_post_publication_inspection,
+    )
+
+    with pytest.raises(RawTherapeeError):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
 @pytest.mark.parametrize(
     ("profile_attribute", "system_profile"),
     [("ACESCG_PROFILE", ACESCG_PROFILE), ("SRGB_PROFILE", SRGB_PROFILE)],

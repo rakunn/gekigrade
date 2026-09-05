@@ -824,54 +824,52 @@ def prepare_job(
             rawtherapee_executable=(rawtherapee_executable if source_format == "ARW" else None),
         ),
     )
-    if not _artifact_matches(working, working_sha256) or not _artifact_matches(
-        preview, preview_sha256
-    ):
+    try:
+        if not _artifact_matches(working, working_sha256) or not _artifact_matches(
+            preview, preview_sha256
+        ):
+            raise RuntimeError(
+                "prepared working or preview artifact changed during manifest publication"
+            )
+        if not _artifact_matches(ACESCG_PROFILE, working_profile_sha256) or not _artifact_matches(
+            SRGB_PROFILE, output_profile_sha256
+        ):
+            raise RuntimeError("validated color profile changed while publishing the job manifest")
+        if source_format == "ARW" and not _raw_source_matches(source_path, source["source_sha256"]):
+            raise RawTherapeeError("source RAW changed while publishing the job manifest")
+        if raw_profile_artifact is not None and not _artifact_matches(*raw_profile_artifact):
+            raise RawTherapeeError(
+                "copied RAW development profile changed while publishing the manifest"
+            )
+        if raw_output_profile_artifact is not None and not _artifact_matches(
+            *raw_output_profile_artifact
+        ):
+            raise RawTherapeeError(
+                "RawTherapee output ICC profile changed while publishing the manifest"
+            )
+        if developed_artifact is not None and not _artifact_matches(*developed_artifact):
+            raise RawTherapeeError("developed TIFF changed while publishing the manifest")
+        if raw_run_report_artifact is not None and not _artifact_matches(*raw_run_report_artifact):
+            raise RawTherapeeError("RawTherapee run report changed while publishing the manifest")
+        if raw_camera_resources_status is not None and (
+            inspect_camera_resources(executable=rawtherapee_executable)
+            != raw_camera_resources_status
+            or inspect_camera_input_profile(
+                source["capture_metadata"], executable=rawtherapee_executable
+            )
+            != raw_camera_input_profile
+        ):
+            raise RawTherapeeError(
+                "RawTherapee camera resources changed while publishing the manifest"
+            )
+        if (
+            raw_lensfun_database_status is not None
+            and raw_lensfun_database_path is not None
+            and inspect_lensfun_database(database=raw_lensfun_database_path)
+            != raw_lensfun_database_status
+        ):
+            raise RawTherapeeError("Lensfun database changed while publishing the manifest")
+    except Exception:
         manifest_path.unlink(missing_ok=True)
-        raise RuntimeError(
-            "prepared working or preview artifact changed during manifest publication"
-        )
-    if not _artifact_matches(ACESCG_PROFILE, working_profile_sha256) or not _artifact_matches(
-        SRGB_PROFILE, output_profile_sha256
-    ):
-        manifest_path.unlink(missing_ok=True)
-        raise RuntimeError("validated color profile changed while publishing the job manifest")
-    if source_format == "ARW" and not _raw_source_matches(source_path, source["source_sha256"]):
-        manifest_path.unlink(missing_ok=True)
-        raise RawTherapeeError("source RAW changed while publishing the job manifest")
-    if raw_profile_artifact is not None and not _artifact_matches(*raw_profile_artifact):
-        manifest_path.unlink(missing_ok=True)
-        raise RawTherapeeError(
-            "copied RAW development profile changed while publishing the manifest"
-        )
-    if raw_output_profile_artifact is not None and not _artifact_matches(
-        *raw_output_profile_artifact
-    ):
-        manifest_path.unlink(missing_ok=True)
-        raise RawTherapeeError(
-            "RawTherapee output ICC profile changed while publishing the manifest"
-        )
-    if developed_artifact is not None and not _artifact_matches(*developed_artifact):
-        manifest_path.unlink(missing_ok=True)
-        raise RawTherapeeError("developed TIFF changed while publishing the manifest")
-    if raw_run_report_artifact is not None and not _artifact_matches(*raw_run_report_artifact):
-        manifest_path.unlink(missing_ok=True)
-        raise RawTherapeeError("RawTherapee run report changed while publishing the manifest")
-    if raw_camera_resources_status is not None and (
-        inspect_camera_resources(executable=rawtherapee_executable) != raw_camera_resources_status
-        or inspect_camera_input_profile(
-            source["capture_metadata"], executable=rawtherapee_executable
-        )
-        != raw_camera_input_profile
-    ):
-        manifest_path.unlink(missing_ok=True)
-        raise RawTherapeeError("RawTherapee camera resources changed while publishing the manifest")
-    if (
-        raw_lensfun_database_status is not None
-        and raw_lensfun_database_path is not None
-        and inspect_lensfun_database(database=raw_lensfun_database_path)
-        != raw_lensfun_database_status
-    ):
-        manifest_path.unlink(missing_ok=True)
-        raise RawTherapeeError("Lensfun database changed while publishing the manifest")
+        raise
     return job

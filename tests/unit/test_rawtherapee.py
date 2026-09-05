@@ -149,6 +149,50 @@ print("processed deterministically")
     }
 
 
+def test_develop_raw_does_not_follow_a_raced_profile_destination_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "photo.arw"
+    _write_uint16_tiff(source)
+    source_before = source.read_bytes()
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        """#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+""",
+    )
+    work = tmp_path / "rawtherapee"
+    target = work / "developed.tif"
+    original_mkdir = Path.mkdir
+
+    def create_raced_symlink_after_mkdir(path: Path, *args: Any, **kwargs: Any) -> None:
+        original_mkdir(path, *args, **kwargs)
+        if path == work / "tmp":
+            (work / "development.pp3").symlink_to(source)
+
+    monkeypatch.setattr(Path, "mkdir", create_raced_symlink_after_mkdir)
+
+    with pytest.raises(RawTherapeeError, match="profile destination"):
+        develop_raw(
+            source,
+            target,
+            work_directory=work,
+            profile=profile,
+            executable=executable,
+        )
+
+    assert source.read_bytes() == source_before
+    assert not target.exists()
+
+
 def test_develop_raw_surfaces_failure_and_does_not_admit_partial_output(tmp_path: Path) -> None:
     source = tmp_path / "photo.arw"
     _write_uint16_tiff(source)
@@ -389,14 +433,14 @@ shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1])
 """,
     )
     plist = executable.parent.parent / "Info.plist"
-    original_copyfile = shutil.copyfile
+    original_copy_profile = rawtherapee_module._copy_profile_exclusive
 
-    def copy_profile_then_upgrade(source_path: Path, target_path: Path) -> None:
-        original_copyfile(source_path, target_path)
-        if target_path.name == "development.pp3":
-            plist.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "5.12"}))
+    def copy_profile_then_upgrade(source_path: Path, target_path: Path) -> str:
+        copied_sha256 = original_copy_profile(source_path, target_path)
+        plist.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "5.12"}))
+        return copied_sha256
 
-    monkeypatch.setattr(shutil, "copyfile", copy_profile_then_upgrade)
+    monkeypatch.setattr(rawtherapee_module, "_copy_profile_exclusive", copy_profile_then_upgrade)
     work = tmp_path / "rawtherapee"
     target = work / "developed.tif"
 

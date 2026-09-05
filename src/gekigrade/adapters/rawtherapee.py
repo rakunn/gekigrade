@@ -137,6 +137,63 @@ def rawtherapee_bundle_has_symlink(executable: Path) -> bool:
         return True
 
 
+def _bundle_fingerprint(bundle: Path) -> str:
+    try:
+        root_before = bundle.lstat()
+        if bundle.is_symlink() or not stat.S_ISDIR(root_before.st_mode):
+            raise RawTherapeeError("RawTherapee application bundle is not a safe directory")
+        paths = sorted(bundle.rglob("*"), key=lambda path: path.relative_to(bundle).as_posix())
+        digest = hashlib.sha256()
+        identities: dict[str, tuple[int, int, int, int, int]] = {}
+        for path in paths:
+            relative = path.relative_to(bundle).as_posix()
+            status_before = path.lstat()
+            identity_before = _file_identity(status_before)
+            if stat.S_ISLNK(status_before.st_mode):
+                raise RawTherapeeError("RawTherapee application bundle contains symlinks")
+            mode = stat.S_IMODE(status_before.st_mode)
+            if stat.S_ISDIR(status_before.st_mode):
+                record = f"directory\0{relative}\0{mode:o}\n"
+            elif stat.S_ISREG(status_before.st_mode):
+                file_sha256 = _stable_source_sha256(path)
+                if file_sha256 is None or _file_identity(path.lstat()) != identity_before:
+                    raise RawTherapeeError(
+                        "RawTherapee application bundle changed while it was fingerprinted"
+                    )
+                record = f"file\0{relative}\0{mode:o}\0{status_before.st_size}\0{file_sha256}\n"
+            else:
+                raise RawTherapeeError(
+                    "RawTherapee application bundle contains a non-regular entry"
+                )
+            identities[relative] = identity_before
+            digest.update(record.encode("utf-8"))
+
+        paths_after = sorted(
+            bundle.rglob("*"), key=lambda path: path.relative_to(bundle).as_posix()
+        )
+        if [path.relative_to(bundle).as_posix() for path in paths_after] != list(identities):
+            raise RawTherapeeError(
+                "RawTherapee application bundle changed while it was fingerprinted"
+            )
+        for path in paths_after:
+            relative = path.relative_to(bundle).as_posix()
+            if _file_identity(path.lstat()) != identities[relative]:
+                raise RawTherapeeError(
+                    "RawTherapee application bundle changed while it was fingerprinted"
+                )
+        if _file_identity(bundle.lstat()) != _file_identity(root_before):
+            raise RawTherapeeError(
+                "RawTherapee application bundle changed while it was fingerprinted"
+            )
+    except RawTherapeeError:
+        raise
+    except OSError as exc:
+        raise RawTherapeeError(
+            f"RawTherapee application bundle could not be fingerprinted: {exc}"
+        ) from exc
+    return digest.hexdigest()
+
+
 def _stable_source_sha256(path: Path) -> str | None:
     flags = os.O_RDONLY | os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
@@ -217,10 +274,11 @@ def _write_run_report(report_path: Path, report: Mapping[str, object], target: P
         raise RawTherapeeError("RawTherapee run report could not be written safely") from exc
 
 
-def _snapshot_runtime_bundle(executable: Path) -> tuple[Path, Path, str]:
+def _snapshot_runtime_bundle(executable: Path) -> tuple[Path, Path, str, str]:
     bundle = executable.parents[2]
     if rawtherapee_bundle_has_symlink(executable):
         raise RawTherapeeError("RawTherapee application bundle contains symlinks")
+    selected_bundle_sha256 = _bundle_fingerprint(bundle)
     runtime_root = Path(
         tempfile.mkdtemp(prefix="gekigrade-rawtherapee-runtime-", dir="/private/tmp")
     )
@@ -274,7 +332,21 @@ def _snapshot_runtime_bundle(executable: Path) -> tuple[Path, Path, str]:
     ):
         shutil.rmtree(runtime_root, ignore_errors=True)
         raise RawTherapeeError("RawTherapee runtime snapshot has no safe executable")
-    return runtime_root, runtime_executable, strategy
+    try:
+        runtime_bundle_sha256 = _bundle_fingerprint(clone)
+        selected_bundle_sha256_after = _bundle_fingerprint(bundle)
+    except Exception:
+        shutil.rmtree(runtime_root, ignore_errors=True)
+        raise
+    if (
+        runtime_bundle_sha256 != selected_bundle_sha256
+        or selected_bundle_sha256_after != selected_bundle_sha256
+    ):
+        shutil.rmtree(runtime_root, ignore_errors=True)
+        raise RawTherapeeError(
+            "RawTherapee runtime snapshot does not match the selected application bundle"
+        )
+    return runtime_root, runtime_executable, strategy, selected_bundle_sha256
 
 
 def _resource_fingerprint(executable: Path, metadata: dict[str, object]) -> dict[str, object]:
@@ -821,9 +893,12 @@ def develop_raw(
     selected_tool_version = _tool_version(executable)
     selected_executable_sha256 = _sha256(executable)
     try:
-        runtime_root, runtime_executable, runtime_snapshot_strategy = _snapshot_runtime_bundle(
-            executable
-        )
+        (
+            runtime_root,
+            runtime_executable,
+            runtime_snapshot_strategy,
+            bundle_sha256,
+        ) = _snapshot_runtime_bundle(executable)
     except Exception:
         source_snapshot.unlink(missing_ok=True)
         raise
@@ -934,6 +1009,7 @@ def develop_raw(
             if capture_metadata is not None
             else None
         )
+        runtime_bundle_sha256_after = _bundle_fingerprint(runtime_executable.parents[2])
     except Exception:
         target.unlink(missing_ok=True)
         raise
@@ -949,6 +1025,8 @@ def develop_raw(
         "executable": str(executable),
         "runtime_executable": str(runtime_executable),
         "runtime_snapshot_strategy": runtime_snapshot_strategy,
+        "bundle_sha256": bundle_sha256,
+        "runtime_bundle_sha256_after": runtime_bundle_sha256_after,
         "executable_sha256": executable_sha256,
         "executable_sha256_after": executable_sha256_after,
         "selected_executable_sha256": selected_executable_sha256,
@@ -991,6 +1069,9 @@ def develop_raw(
     if runtime_resources_after != runtime_resources_before:
         target.unlink(missing_ok=True)
         raise RawTherapeeError("RawTherapee runtime resources changed while it was running")
+    if runtime_bundle_sha256_after != bundle_sha256:
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee runtime bundle changed while it was running")
     if profile_sha256_after != profile_sha256:
         target.unlink(missing_ok=True)
         raise RawTherapeeError("RAW development profile changed while RawTherapee was running")

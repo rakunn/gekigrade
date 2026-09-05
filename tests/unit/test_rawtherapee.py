@@ -140,6 +140,8 @@ print("processed deterministically")
     assert report["tool_version"] == "5.13"
     assert report["tool_version_after"] == "5.13"
     assert report["profile_sha256_after"] == _sha256(profile)
+    assert len(report["bundle_sha256"]) == 64
+    assert report["runtime_bundle_sha256_after"] == report["bundle_sha256"]
     assert report["environment"] == {
         "LC_ALL": "C",
         "OMP_DYNAMIC": "FALSE",
@@ -269,6 +271,39 @@ def test_rawtherapee_full_copy_fallback_has_a_timeout(
 
     assert [command[1] for command in observed_commands] == ["-cR", "-R"]
     assert not runtime_root.exists()
+
+
+def test_rawtherapee_runtime_snapshot_rejects_a_temporarily_replaced_bundle_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        "#!/bin/sh\nexit 0\n",
+    )
+    runtime_library = executable.parent.parent / "Frameworks/runtime.dylib"
+    runtime_library.parent.mkdir()
+    runtime_library.write_bytes(b"accepted runtime library")
+    original_run = subprocess.run
+
+    def copy_with_raced_runtime(
+        command: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        if command[:2] == ["/bin/cp", "-cR"]:
+            accepted = runtime_library.read_bytes()
+            runtime_library.write_bytes(b"temporarily replaced runtime library")
+            try:
+                return original_run(command, **kwargs)
+            finally:
+                runtime_library.write_bytes(accepted)
+        return original_run(command, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", copy_with_raced_runtime)
+
+    with pytest.raises(RawTherapeeError, match="does not match the selected application bundle"):
+        rawtherapee_module._snapshot_runtime_bundle(executable)
+
+    assert runtime_library.read_bytes() == b"accepted runtime library"
 
 
 def test_develop_raw_does_not_authorize_overwriting_a_raced_output_symlink(

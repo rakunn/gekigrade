@@ -442,6 +442,30 @@ def test_prepare_manifest_uses_the_selected_rawtherapee_output_profile_status(
         "install_hint": "Install with: brew install --cask rawtherapee",
         "error": None,
     }
+
+
+def test_prepare_manifest_uses_the_selected_exiftool_and_imagemagick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    selected_magick = Path("/opt/homebrew/bin/magick")
+    monkeypatch.setattr(doctor_module, "EXIFTOOL_CLI", tmp_path / "missing-exiftool")
+    monkeypatch.setattr(doctor_module, "IMAGEMAGICK_CLI", tmp_path / "missing-magick")
+    job = tmp_path / "raw-job"
+
+    prepare_job(
+        source,
+        job,
+        exiftool_executable=exiftool,
+        rawtherapee_executable=rawtherapee,
+        imagemagick_executable=selected_magick,
+    )
+
+    manifest = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["tools"]["tools"]["exiftool"]["path"] == str(exiftool)
+    assert manifest["tools"]["tools"]["imagemagick"]["path"] == str(selected_magick)
+    assert manifest["tools"]["ready_for_jpeg"] is True
+    assert manifest["tools"]["ready_for_raw"] is True
     assert manifest["tools"]["profiles"]["rawtherapee_camera_resources"][
         "dcp_directory"
     ].startswith(str(rawtherapee.parent.parent))

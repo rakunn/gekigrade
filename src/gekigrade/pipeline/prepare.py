@@ -522,6 +522,8 @@ def _artifact_manifest(
     *,
     working_profile_sha256: str,
     output_profile_sha256: str,
+    exiftool_executable: Path,
+    imagemagick_executable: Path,
     raw_output_profile_status: dict[str, str | bool | None] | None = None,
     raw_camera_resources_status: CameraResourceStatus | None = None,
     raw_lensfun_database_status: ResourceStatus | None = None,
@@ -529,6 +531,8 @@ def _artifact_manifest(
 ) -> dict[str, Any]:
     doctor = build_doctor_report(
         run_color_probe=False,
+        exiftool_executable=exiftool_executable,
+        imagemagick_executable=imagemagick_executable,
         rawtherapee_executable=rawtherapee_executable,
         raw_output_profile_status=raw_output_profile_status,
         raw_camera_resources_status=raw_camera_resources_status,
@@ -818,6 +822,8 @@ def prepare_job(
             source,
             working_profile_sha256=working_profile_sha256,
             output_profile_sha256=output_profile_sha256,
+            exiftool_executable=exiftool_executable,
+            imagemagick_executable=imagemagick_executable,
             raw_output_profile_status=raw_output_profile_status,
             raw_camera_resources_status=raw_camera_resources_status,
             raw_lensfun_database_status=raw_lensfun_database_status,

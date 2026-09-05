@@ -223,11 +223,15 @@ def _color_probe(magick_path: str) -> dict[str, Any]:
 def build_doctor_report(
     *,
     run_color_probe: bool = True,
+    exiftool_executable: Path | None = None,
+    imagemagick_executable: Path | None = None,
     rawtherapee_executable: Path | None = None,
     raw_output_profile_status: dict[str, str | bool | None] | None = None,
     raw_camera_resources_status: CameraResourceStatus | None = None,
     raw_lensfun_database_status: ResourceStatus | None = None,
 ) -> dict[str, Any]:
+    selected_exiftool = exiftool_executable or EXIFTOOL_CLI
+    selected_imagemagick = imagemagick_executable or IMAGEMAGICK_CLI
     selected_rawtherapee = rawtherapee_executable or RAWTHERAPEE_CLI
     rawtherapee_plist = (
         RAWTHERAPEE_PLIST
@@ -239,7 +243,7 @@ def build_doctor_report(
         "exiftool": inspect_tool(
             ExternalTool(
                 name="exiftool",
-                candidates=(str(EXIFTOOL_CLI),),
+                candidates=(str(selected_exiftool),),
                 version_args=("-config", "", "-ver"),
                 install_hint="Install with: brew install exiftool",
             ),
@@ -248,10 +252,11 @@ def build_doctor_report(
         "imagemagick": inspect_tool(
             ExternalTool(
                 name="imagemagick",
-                candidates=(str(IMAGEMAGICK_CLI),),
+                candidates=(str(selected_imagemagick),),
                 version_args=("-version",),
                 install_hint="Install with: brew install imagemagick",
-            )
+            ),
+            environment=MAGICK_ENVIRONMENT,
         ),
         "rawtherapee": _rawtherapee_status(
             executable=selected_rawtherapee, plist=rawtherapee_plist

@@ -10,6 +10,7 @@ import stat
 import subprocess
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, TypedDict
@@ -151,7 +152,9 @@ def _stable_source_sha256(path: Path) -> str | None:
     return digest
 
 
-def _copy_profile_exclusive(source: Path, destination: Path) -> str:
+def _copy_regular_file_exclusive(
+    source: Path, destination: Path, *, label: str, mode: int = 0o600
+) -> str:
     source_flags = os.O_RDONLY | os.O_NONBLOCK
     destination_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
@@ -160,14 +163,12 @@ def _copy_profile_exclusive(source: Path, destination: Path) -> str:
     try:
         source_descriptor = os.open(source, source_flags)
     except OSError as exc:
-        raise RawTherapeeError("RAW development profile could not be opened safely") from exc
+        raise RawTherapeeError(f"{label} could not be opened safely") from exc
     try:
-        destination_descriptor = os.open(destination, destination_flags, 0o600)
+        destination_descriptor = os.open(destination, destination_flags, mode)
     except OSError as exc:
         os.close(source_descriptor)
-        raise RawTherapeeError(
-            "RAW development profile destination could not be created safely"
-        ) from exc
+        raise RawTherapeeError(f"{label} destination could not be created safely") from exc
     try:
         with (
             os.fdopen(source_descriptor, "rb") as source_stream,
@@ -176,7 +177,7 @@ def _copy_profile_exclusive(source: Path, destination: Path) -> str:
             opened_status = os.fstat(source_stream.fileno())
             opened_identity = _file_identity(opened_status)
             if not stat.S_ISREG(opened_status.st_mode):
-                raise RawTherapeeError("RAW development profile is not a regular file")
+                raise RawTherapeeError(f"{label} source is not a regular file")
             shutil.copyfileobj(source_stream, destination_stream)
             source_identity_after = _file_identity(os.fstat(source_stream.fileno()))
         source_path_status = source.lstat()
@@ -185,14 +186,26 @@ def _copy_profile_exclusive(source: Path, destination: Path) -> str:
             or opened_identity != source_identity_after
             or _file_identity(source_path_status) != opened_identity
         ):
-            raise RawTherapeeError("RAW development profile changed while it was copied")
+            raise RawTherapeeError(f"{label} source changed while it was copied")
         copied_sha256 = _stable_source_sha256(destination)
         if copied_sha256 is None:
-            raise RawTherapeeError("copied RAW development profile is not a stable regular file")
+            raise RawTherapeeError(f"copied {label} is not a stable regular file")
         return copied_sha256
     except Exception:
         destination.unlink(missing_ok=True)
         raise
+
+
+def _copy_profile_exclusive(source: Path, destination: Path) -> str:
+    return _copy_regular_file_exclusive(source, destination, label="RAW development profile")
+
+
+def _write_run_report(report_path: Path, report: Mapping[str, object], target: Path) -> None:
+    try:
+        write_json(report_path, report)
+    except OSError as exc:
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee run report could not be written safely") from exc
 
 
 def _validate_developed_tiff(target: Path) -> str:
@@ -683,6 +696,13 @@ def develop_raw(
     temporary.mkdir()
     copied_profile = work_directory / "development.pp3"
     profile_sha256 = _copy_profile_exclusive(profile, copied_profile)
+    source_snapshot = work_directory / f"source-snapshot{source.suffix}"
+    before = _copy_regular_file_exclusive(
+        source,
+        source_snapshot,
+        label="source RAW snapshot",
+        mode=0o400,
+    )
     target.parent.mkdir(parents=True, exist_ok=True)
 
     arguments = [
@@ -696,7 +716,7 @@ def develop_raw(
         "-b16",
         "-Y",
         "-c",
-        str(source),
+        str(source_snapshot),
     ]
     environment = {
         "LC_ALL": "C",
@@ -708,44 +728,47 @@ def develop_raw(
         "RT_SETTINGS": str(settings),
         "TMPDIR": str(temporary),
     }
-    before = _stable_source_sha256(source)
-    if before is None:
-        raise RawTherapeeError("source RAW is not a stable regular file before development")
-    tool_version = _tool_version(executable)
-    if tool_version != SUPPORTED_RAWTHERAPEE_VERSION:
-        found = tool_version or "unknown"
-        raise RawTherapeeError(
-            f"GekiGrade requires version {SUPPORTED_RAWTHERAPEE_VERSION}; found {found}"
-        )
-    executable_sha256 = _sha256(executable)
-    started = time.monotonic()
     try:
-        completed = subprocess.run(
-            arguments,
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=timeout_seconds,
-            stdin=subprocess.DEVNULL,
-            env=environment,
-        )
-        returncode: int | None = completed.returncode
-        stdout = completed.stdout.strip()
-        stderr = completed.stderr.strip()
-        execution_error: str | None = None
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        returncode = None
-        stdout = ""
-        stderr = ""
-        execution_error = str(exc)
+        if _stable_source_sha256(source) != before:
+            raise RawTherapeeError("source RAW changed while its execution snapshot was created")
+        tool_version = _tool_version(executable)
+        if tool_version != SUPPORTED_RAWTHERAPEE_VERSION:
+            found = tool_version or "unknown"
+            raise RawTherapeeError(
+                f"GekiGrade requires version {SUPPORTED_RAWTHERAPEE_VERSION}; found {found}"
+            )
+        executable_sha256 = _sha256(executable)
+        started = time.monotonic()
+        try:
+            completed = subprocess.run(
+                arguments,
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=timeout_seconds,
+                stdin=subprocess.DEVNULL,
+                env=environment,
+            )
+            returncode: int | None = completed.returncode
+            stdout = completed.stdout.strip()
+            stderr = completed.stderr.strip()
+            execution_error: str | None = None
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            returncode = None
+            stdout = ""
+            stderr = ""
+            execution_error = str(exc)
 
-    after = _stable_source_sha256(source)
-    tool_version_after = _tool_version(executable)
-    try:
-        executable_sha256_after = _sha256(executable)
-    except OSError:
-        executable_sha256_after = None
-    profile_sha256_after = _stable_source_sha256(copied_profile)
+        after = _stable_source_sha256(source)
+        source_snapshot_after = _stable_source_sha256(source_snapshot)
+        tool_version_after = _tool_version(executable)
+        try:
+            executable_sha256_after = _sha256(executable)
+        except OSError:
+            executable_sha256_after = None
+        profile_sha256_after = _stable_source_sha256(copied_profile)
+    finally:
+        source_snapshot.unlink(missing_ok=True)
     report_path = work_directory / "run.json"
     report = {
         "schema_version": "1.0.0",
@@ -764,14 +787,21 @@ def develop_raw(
         "error": execution_error,
         "source_sha256_before": before,
         "source_sha256_after": after,
+        "source_snapshot_sha256_before": before,
+        "source_snapshot_sha256_after": source_snapshot_after,
         "profile_sha256": profile_sha256,
         "profile_sha256_after": profile_sha256_after,
     }
-    write_json(report_path, report)
+    _write_run_report(report_path, report, target)
 
     if before != after:
         target.unlink(missing_ok=True)
         raise RawTherapeeError("source RAW changed while RawTherapee was running")
+    if source_snapshot_after != before:
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError(
+            "source RAW execution snapshot changed while RawTherapee was running"
+        )
     if tool_version_after != tool_version or executable_sha256_after != executable_sha256:
         target.unlink(missing_ok=True)
         raise RawTherapeeError("RawTherapee executable changed while it was running")
@@ -787,7 +817,7 @@ def develop_raw(
         raise RawTherapeeError(f"RawTherapee failed: {detail}")
     output_sha256 = _validate_developed_tiff(target)
     report["output_sha256"] = output_sha256
-    write_json(report_path, report)
+    _write_run_report(report_path, report, target)
     report_sha256 = _stable_source_sha256(report_path)
     if report_sha256 is None:
         target.unlink(missing_ok=True)

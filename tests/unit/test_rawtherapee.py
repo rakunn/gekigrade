@@ -112,7 +112,7 @@ print("processed deterministically")
         "-b16",
         "-Y",
         "-c",
-        str(source.resolve()),
+        str(work / "source-snapshot.arw"),
     ]
     assert invocation["settings"] == str(work / "settings")
     assert invocation["cache"] == str(work / "cache")
@@ -132,6 +132,8 @@ print("processed deterministically")
     assert report["stdout"] == "processed deterministically"
     assert report["source_sha256_before"] == before
     assert report["source_sha256_after"] == before
+    assert report["source_snapshot_sha256_before"] == before
+    assert report["source_snapshot_sha256_after"] == before
     assert report["executable_sha256"] == _sha256(executable)
     assert report["executable_sha256_after"] == _sha256(executable)
     assert report["tool_version"] == "5.13"
@@ -191,6 +193,92 @@ shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1])
 
     assert source.read_bytes() == source_before
     assert not target.exists()
+
+
+def test_develop_raw_does_not_follow_a_raced_run_report_temporary_symlink(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "photo.arw"
+    _write_uint16_tiff(source)
+    source_before = source.read_bytes()
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        f"""#!/usr/bin/env python3
+import os
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+(pathlib.Path(os.environ["RT_SETTINGS"]).parent / "run.json.tmp").symlink_to(
+    pathlib.Path({str(source)!r})
+)
+""",
+    )
+    work = tmp_path / "rawtherapee"
+    target = work / "developed.tif"
+
+    with pytest.raises(RawTherapeeError, match="run report"):
+        develop_raw(
+            source,
+            target,
+            work_directory=work,
+            profile=profile,
+            executable=executable,
+        )
+
+    assert source.read_bytes() == source_before
+    assert not target.exists()
+
+
+def test_develop_raw_uses_a_private_source_snapshot_during_execution(tmp_path: Path) -> None:
+    source = tmp_path / "photo.arw"
+    replacement = tmp_path / "replacement.arw"
+    _write_uint16_tiff(source, value=32768)
+    _write_uint16_tiff(replacement, value=12000)
+    source_before = source.read_bytes()
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        f"""#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+original = pathlib.Path({str(source)!r})
+replacement = pathlib.Path({str(replacement)!r})
+backup = original.with_suffix(".backup")
+original.rename(backup)
+try:
+    shutil.copyfile(replacement, original)
+    shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+finally:
+    original.unlink(missing_ok=True)
+    backup.rename(original)
+""",
+    )
+    work = tmp_path / "rawtherapee"
+    target = work / "developed.tif"
+
+    result = develop_raw(
+        source,
+        target,
+        work_directory=work,
+        profile=profile,
+        executable=executable,
+    )
+
+    assert source.read_bytes() == source_before
+    assert target.read_bytes() == source_before
+    assert result.output_sha256 == _sha256(source)
+    assert not list(work.glob("source-snapshot*"))
 
 
 def test_develop_raw_surfaces_failure_and_does_not_admit_partial_output(tmp_path: Path) -> None:
@@ -259,15 +347,14 @@ def test_develop_raw_cleans_up_if_source_disappears_during_run(tmp_path: Path) -
     executable = _write_rawtherapee_app(
         tmp_path,
         "5.13",
-        """#!/usr/bin/env python3
+        f"""#!/usr/bin/env python3
 import pathlib
 import shutil
 import sys
 
 args = sys.argv[1:]
-source = pathlib.Path(args[-1])
-shutil.copyfile(source, pathlib.Path(args[args.index("-o") + 1]))
-source.unlink()
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+pathlib.Path({str(source)!r}).unlink()
 """,
     )
     work = tmp_path / "rawtherapee"

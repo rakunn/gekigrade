@@ -7,6 +7,7 @@ import plistlib
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import OpenImageIO as oiio
@@ -200,6 +201,42 @@ def test_prepare_rejects_non_jpeg_before_creating_job(tmp_path: Path) -> None:
         raise AssertionError("invalid JPEG was accepted")
 
     assert not job.exists()
+
+
+def test_inspect_rejects_a_symlink_before_reading_its_signature(
+    tagged_oriented_jpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    linked = tmp_path / "linked.jpg"
+    linked.symlink_to(tagged_oriented_jpeg)
+    original_open = cast(Any, Path.open)
+
+    def reject_link_open(path: Path, *args: object, **kwargs: object) -> Any:
+        if path == linked:
+            raise AssertionError("source signature was read through a symlink")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", reject_link_open)
+
+    with pytest.raises(ValueError, match="regular, non-symlink"):
+        inspect_photo(linked)
+
+
+def test_prepare_rejects_a_symlink_before_reading_its_signature(
+    tagged_oriented_jpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    linked = tmp_path / "linked.jpg"
+    linked.symlink_to(tagged_oriented_jpeg)
+    original_open = cast(Any, Path.open)
+
+    def reject_link_open(path: Path, *args: object, **kwargs: object) -> Any:
+        if path == linked:
+            raise AssertionError("source signature was read through a symlink")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", reject_link_open)
+
+    with pytest.raises(ValueError, match="regular, non-symlink"):
+        prepare_job(linked, tmp_path / "job")
 
 
 def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(

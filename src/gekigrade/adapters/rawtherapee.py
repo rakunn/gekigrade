@@ -503,6 +503,10 @@ def develop_raw(
         executable_sha256_after = _sha256(executable)
     except OSError:
         executable_sha256_after = None
+    try:
+        profile_sha256_after = _sha256(copied_profile)
+    except OSError:
+        profile_sha256_after = None
     report_path = work_directory / "run.json"
     report = {
         "schema_version": "1.0.0",
@@ -522,6 +526,7 @@ def develop_raw(
         "source_sha256_before": before,
         "source_sha256_after": after,
         "profile_sha256": profile_sha256,
+        "profile_sha256_after": profile_sha256_after,
     }
     write_json(report_path, report)
 
@@ -531,6 +536,9 @@ def develop_raw(
     if tool_version_after != tool_version or executable_sha256_after != executable_sha256:
         target.unlink(missing_ok=True)
         raise RawTherapeeError("RawTherapee executable changed while it was running")
+    if profile_sha256_after != profile_sha256:
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("RAW development profile changed while RawTherapee was running")
     if execution_error is not None:
         target.unlink(missing_ok=True)
         raise RawTherapeeError(f"RawTherapee could not complete: {execution_error}")

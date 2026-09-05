@@ -183,9 +183,15 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
     }
 
 
-def inspect_photo(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[str, Any]:
+def _source_signature(path: Path) -> bytes:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("source must be a regular, non-symlink file")
     with path.open("rb") as stream:
-        signature = stream.read(4)
+        return stream.read(4)
+
+
+def inspect_photo(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[str, Any]:
+    signature = _source_signature(path)
     if signature[:3] == b"\xff\xd8\xff":
         result, _ = _inspect_jpeg(path, exiftool_executable=exiftool_executable)
         return result
@@ -299,8 +305,7 @@ def prepare_job(
     rawtherapee_executable: Path = RAWTHERAPEE_CLI,
     raw_output_profile: Path = RAWTHERAPEE_OUTPUT_PROFILE,
 ) -> Path:
-    with source_path.open("rb") as stream:
-        signature = stream.read(4)
+    signature = _source_signature(source_path)
     if signature[:3] == b"\xff\xd8\xff":
         source, embedded_profile = _inspect_jpeg(
             source_path, exiftool_executable=exiftool_executable

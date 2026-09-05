@@ -112,6 +112,7 @@ print("processed deterministically")
     assert report["executable_sha256_after"] == _sha256(executable)
     assert report["tool_version"] == "5.13"
     assert report["tool_version_after"] == "5.13"
+    assert report["profile_sha256_after"] == _sha256(profile)
 
 
 def test_develop_raw_surfaces_failure_and_does_not_admit_partial_output(tmp_path: Path) -> None:
@@ -246,6 +247,40 @@ shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1])
     target = work / "developed.tif"
 
     with pytest.raises(RawTherapeeError, match=r"requires version 5\.13; found 5\.12"):
+        develop_raw(
+            source,
+            target,
+            work_directory=work,
+            profile=profile,
+            executable=executable,
+        )
+
+    assert not target.exists()
+
+
+def test_develop_raw_rejects_a_copied_profile_changed_during_the_run(tmp_path: Path) -> None:
+    source = tmp_path / "photo.arw"
+    _write_uint16_tiff(source)
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        """#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+with pathlib.Path(args[args.index("-p") + 1]).open("a", encoding="utf-8") as stream:
+    stream.write("# changed during run\\n")
+""",
+    )
+    work = tmp_path / "rawtherapee"
+    target = work / "developed.tif"
+
+    with pytest.raises(RawTherapeeError, match="development profile changed"):
         develop_raw(
             source,
             target,

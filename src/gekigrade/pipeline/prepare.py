@@ -44,6 +44,7 @@ from gekigrade.grading.looks import looks_as_json
 
 MAX_SOURCE_BYTES = 1024 * 1024 * 1024
 MAX_PIXEL_COUNT = 200_000_000
+RAW_MIN_DIMENSION_RETENTION_PERCENT = 95
 EXIFTOOL = EXIFTOOL_CLI
 
 
@@ -368,6 +369,14 @@ def _orientation_axis_matches(expected: dict[str, int], actual: dict[str, int]) 
     return expected_axis == 0 or expected_axis == actual_axis
 
 
+def _raw_dimensions_within_border_crop(expected: dict[str, int], actual: dict[str, int]) -> bool:
+    return all(
+        actual[axis] <= expected[axis]
+        and actual[axis] * 100 >= expected[axis] * RAW_MIN_DIMENSION_RETENTION_PERCENT
+        for axis in ("width", "height")
+    )
+
+
 def _contact_sheet(preview_path: Path, candidates: list[dict[str, Any]], target: Path) -> None:
     with Image.open(preview_path) as opened:
         image = opened.convert("RGB")
@@ -491,6 +500,7 @@ def prepare_job(
     job = create_job_directory(source_path, output_path)
     working = job / "intermediate/working.tif"
     preview = job / "preview.jpg"
+    raw_profile_artifact: tuple[Path, str] | None = None
     if source_format == "JPEG":
         normalization_tool = normalize_jpeg(
             source_path.resolve(),
@@ -521,8 +531,11 @@ def prepare_job(
             profile=DEFAULT_RAW_PROFILE,
             executable=rawtherapee_executable,
         )
-        if result.profile_sha256 != EXPECTED_DEFAULT_RAW_PROFILE_SHA256:
+        if result.profile_sha256 != EXPECTED_DEFAULT_RAW_PROFILE_SHA256 or not _artifact_matches(
+            result.profile_path, result.profile_sha256
+        ):
             raise RawTherapeeError("shipped RAW development profile changed before execution")
+        raw_profile_artifact = (result.profile_path, result.profile_sha256)
         if result.source_sha256 != source["source_sha256"]:
             raise RawTherapeeError("source RAW changed after inspection")
         if (
@@ -593,6 +606,13 @@ def prepare_job(
             raise RuntimeError(
                 "RAW working TIFF orientation does not match the inspected EXIF orientation"
             )
+        if not _raw_dimensions_within_border_crop(
+            inspected_oriented_dimensions, working_dimensions
+        ):
+            working.unlink(missing_ok=True)
+            raise RuntimeError(
+                "RAW working TIFF dimensions are outside the allowed border-crop tolerance"
+            )
         source["oriented_dimensions"] = working_dimensions
         source["raw_development"]["working_profile_sha256"] = working_profile_sha256
     if not _artifact_matches(working, working_sha256):
@@ -639,6 +659,8 @@ def prepare_job(
         )
     if source_format == "ARW" and sha256_file(source_path) != source["source_sha256"]:
         raise RawTherapeeError("source RAW changed during job preparation")
+    if raw_profile_artifact is not None and not _artifact_matches(*raw_profile_artifact):
+        raise RawTherapeeError("copied RAW development profile changed before manifest publication")
     if not _artifact_matches(ACESCG_PROFILE, working_profile_sha256) or not _artifact_matches(
         SRGB_PROFILE, output_profile_sha256
     ):
@@ -668,4 +690,9 @@ def prepare_job(
     if source_format == "ARW" and sha256_file(source_path) != source["source_sha256"]:
         manifest_path.unlink(missing_ok=True)
         raise RawTherapeeError("source RAW changed while publishing the job manifest")
+    if raw_profile_artifact is not None and not _artifact_matches(*raw_profile_artifact):
+        manifest_path.unlink(missing_ok=True)
+        raise RawTherapeeError(
+            "copied RAW development profile changed while publishing the manifest"
+        )
     return job

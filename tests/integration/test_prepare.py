@@ -360,6 +360,12 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     )
 
 
+def test_raw_dimension_tolerance_accepts_the_verified_sony_border_crop() -> None:
+    assert prepare_module._raw_dimensions_within_border_crop(
+        {"width": 9728, "height": 6656}, {"width": 9556, "height": 6366}
+    )
+
+
 def test_prepare_does_not_expose_a_raw_profile_override() -> None:
     assert "raw_profile" not in inspect.signature(prepare_job).parameters
     assert "raw_output_profile" not in inspect.signature(prepare_job).parameters
@@ -518,6 +524,33 @@ def test_prepare_removes_a_manifest_if_the_raw_changes_while_it_is_published(
     monkeypatch.setattr(prepare_module, "_artifact_manifest", build_manifest_then_change_source)
 
     with pytest.raises(RawTherapeeError, match="changed while publishing"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+def test_prepare_removes_manifest_if_copied_raw_profile_changes_while_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    original_manifest = prepare_module._artifact_manifest
+
+    def build_manifest_then_change_profile(
+        job: Path, metadata: dict[str, object], **profile_hashes: str
+    ) -> dict[str, object]:
+        manifest = original_manifest(job, metadata, **profile_hashes)
+        (job / "intermediate/rawtherapee/development.pp3").write_text(
+            "changed-while-publishing-manifest", encoding="utf-8"
+        )
+        return manifest
+
+    monkeypatch.setattr(prepare_module, "_artifact_manifest", build_manifest_then_change_profile)
+
+    with pytest.raises(RawTherapeeError, match="profile changed while publishing"):
         prepare_job(
             source,
             tmp_path / "raw-job",
@@ -713,6 +746,30 @@ def test_prepare_rejects_jpeg_working_dimensions_that_differ_from_source(
         prepare_job(tagged_oriented_jpeg, tmp_path / "jpeg-job")
     assert not (tmp_path / "jpeg-job/preview.jpg").exists()
     assert not (tmp_path / "jpeg-job/manifest.json").exists()
+
+
+def test_prepare_rejects_a_thumbnail_scale_raw_working_tiff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    real_validate = prepare_module._validate_working_tiff
+
+    def report_thumbnail_dimensions(working: Path) -> tuple[dict[str, int], str, str]:
+        _, working_sha256, profile_sha256 = real_validate(working)
+        return {"width": 90, "height": 60}, working_sha256, profile_sha256
+
+    monkeypatch.setattr(prepare_module, "_validate_working_tiff", report_thumbnail_dimensions)
+
+    with pytest.raises(RuntimeError, match="outside the allowed border-crop tolerance"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/intermediate/working.tif").exists()
+    assert not (tmp_path / "raw-job/preview.jpg").exists()
+    assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
 def test_prepare_binds_the_working_hash_to_the_validated_tiff(

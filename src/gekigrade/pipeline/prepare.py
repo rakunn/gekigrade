@@ -383,10 +383,25 @@ def _load_validated_srgb(
 
 
 def _artifact_matches(path: Path, expected_sha256: str) -> bool:
+    flags = os.O_RDONLY | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     try:
-        return not path.is_symlink() and path.is_file() and sha256_file(path) == expected_sha256
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            opened_status = os.fstat(stream.fileno())
+            opened_identity = _file_identity(opened_status)
+            if not stat.S_ISREG(opened_status.st_mode):
+                return False
+            actual_sha256 = _sha256_stream(stream)
+            closed_identity = _file_identity(os.fstat(stream.fileno()))
+        path_status = path.lstat()
     except OSError:
         return False
+    return (
+        stat.S_ISREG(path_status.st_mode)
+        and opened_identity == closed_identity == _file_identity(path_status)
+        and actual_sha256 == expected_sha256
+    )
 
 
 def _stable_regular_file_snapshot(path: Path) -> tuple[str, int] | None:
@@ -502,8 +517,11 @@ def _artifact_manifest(
     working_profile_sha256: str,
     output_profile_sha256: str,
     raw_output_profile_status: dict[str, str | bool | None] | None = None,
+    rawtherapee_executable: Path | None = None,
 ) -> dict[str, Any]:
-    doctor = build_doctor_report(run_color_probe=False)
+    doctor = build_doctor_report(
+        run_color_probe=False, rawtherapee_executable=rawtherapee_executable
+    )
     doctor["profiles"]["acescg"] = {
         "available": True,
         "path": str(ACESCG_PROFILE),
@@ -568,6 +586,7 @@ def prepare_job(
     raw_profile_artifact: tuple[Path, str] | None = None
     raw_output_profile_artifact: tuple[Path, str] | None = None
     raw_output_profile_status: dict[str, str | bool | None] | None = None
+    developed_artifact: tuple[Path, str] | None = None
     if source_format == "JPEG":
         normalization_tool = normalize_jpeg(
             source_path.resolve(),
@@ -607,6 +626,7 @@ def prepare_job(
             profile=DEFAULT_RAW_PROFILE,
             executable=rawtherapee_executable,
         )
+        developed_artifact = (developed, result.output_sha256)
         if result.profile_sha256 != EXPECTED_DEFAULT_RAW_PROFILE_SHA256 or not _artifact_matches(
             result.profile_path, result.profile_sha256
         ):
@@ -741,6 +761,8 @@ def prepare_job(
         *raw_output_profile_artifact
     ):
         raise RawTherapeeError("RawTherapee output ICC profile changed before manifest publication")
+    if developed_artifact is not None and not _artifact_matches(*developed_artifact):
+        raise RawTherapeeError("developed TIFF changed before manifest publication")
     if not _artifact_matches(ACESCG_PROFILE, working_profile_sha256) or not _artifact_matches(
         SRGB_PROFILE, output_profile_sha256
     ):
@@ -754,6 +776,7 @@ def prepare_job(
             working_profile_sha256=working_profile_sha256,
             output_profile_sha256=output_profile_sha256,
             raw_output_profile_status=raw_output_profile_status,
+            rawtherapee_executable=(rawtherapee_executable if source_format == "ARW" else None),
         ),
     )
     if not _artifact_matches(working, working_sha256) or not _artifact_matches(
@@ -783,4 +806,7 @@ def prepare_job(
         raise RawTherapeeError(
             "RawTherapee output ICC profile changed while publishing the manifest"
         )
+    if developed_artifact is not None and not _artifact_matches(*developed_artifact):
+        manifest_path.unlink(missing_ok=True)
+        raise RawTherapeeError("developed TIFF changed while publishing the manifest")
     return job

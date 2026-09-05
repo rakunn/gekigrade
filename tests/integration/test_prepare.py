@@ -434,6 +434,22 @@ def test_prepare_manifest_uses_the_selected_rawtherapee_output_profile_status(
         "device_class": "mntr",
         "error": None,
     }
+    assert manifest["tools"]["tools"]["rawtherapee"] == {
+        "name": "rawtherapee",
+        "available": True,
+        "path": str(rawtherapee),
+        "version": "5.13",
+        "install_hint": "Install with: brew install --cask rawtherapee",
+        "error": None,
+    }
+    assert manifest["tools"]["profiles"]["rawtherapee_camera_resources"][
+        "dcp_directory"
+    ].startswith(str(rawtherapee.parent.parent))
+    assert manifest["tools"]["profiles"]["lensfun_database"]["path"].startswith(
+        str(rawtherapee.parent.parent)
+    )
+    assert manifest["tools"]["ready_for_raw"] is True
+    assert manifest["tools"]["raw_status"] == "adapter-ready"
 
 
 def test_raw_dimension_tolerance_accepts_the_verified_sony_border_crop() -> None:
@@ -716,6 +732,32 @@ def test_prepare_removes_manifest_if_raw_output_profile_changes_while_published(
     monkeypatch.setattr(prepare_module, "_artifact_manifest", change_profile_then_build_manifest)
 
     with pytest.raises(RawTherapeeError, match="output ICC profile changed while publishing"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+def test_prepare_removes_manifest_if_developed_tiff_changes_while_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    original_manifest = prepare_module._artifact_manifest
+
+    def change_developed_then_build_manifest(
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
+    ) -> dict[str, object]:
+        (job / "intermediate/rawtherapee/developed.tif").write_bytes(
+            b"changed-while-publishing-manifest"
+        )
+        return original_manifest(job, metadata, **profile_hashes)
+
+    monkeypatch.setattr(prepare_module, "_artifact_manifest", change_developed_then_build_manifest)
+
+    with pytest.raises(RawTherapeeError, match="developed TIFF changed while publishing"):
         prepare_job(
             source,
             tmp_path / "raw-job",

@@ -137,8 +137,8 @@ def _path_has_symlink(path: Path) -> bool:
         current = parent
 
 
-def _rawtherapee_status() -> ToolStatus:
-    if _path_has_symlink(RAWTHERAPEE_CLI):
+def _rawtherapee_status(*, executable: Path, plist: Path) -> ToolStatus:
+    if _path_has_symlink(executable):
         return ToolStatus(
             name="rawtherapee",
             available=False,
@@ -147,18 +147,18 @@ def _rawtherapee_status() -> ToolStatus:
             install_hint="Install with: brew install --cask rawtherapee",
         )
     version: str | None = None
-    if RAWTHERAPEE_PLIST.is_file():
+    if plist.is_file():
         try:
-            with RAWTHERAPEE_PLIST.open("rb") as stream:
+            with plist.open("rb") as stream:
                 raw_version = plistlib.load(stream).get("CFBundleShortVersionString")
                 version = str(raw_version) if raw_version else None
         except (OSError, plistlib.InvalidFileException):
             version = None
-    available = RAWTHERAPEE_CLI.is_file() and RAWTHERAPEE_CLI.stat().st_mode & 0o111 != 0
+    available = executable.is_file() and executable.stat().st_mode & 0o111 != 0
     return ToolStatus(
         name="rawtherapee",
         available=available,
-        path=str(RAWTHERAPEE_CLI) if available else None,
+        path=str(executable) if available else None,
         version=version,
         install_hint="Install with: brew install --cask rawtherapee",
     )
@@ -228,8 +228,18 @@ def _color_probe(magick_path: str) -> dict[str, Any]:
         }
 
 
-def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
-    rawtherapee_output_profile = rawtherapee_output_profile_for_executable(RAWTHERAPEE_CLI)
+def build_doctor_report(
+    *,
+    run_color_probe: bool = True,
+    rawtherapee_executable: Path | None = None,
+) -> dict[str, Any]:
+    selected_rawtherapee = rawtherapee_executable or RAWTHERAPEE_CLI
+    rawtherapee_plist = (
+        RAWTHERAPEE_PLIST
+        if rawtherapee_executable is None
+        else selected_rawtherapee.parent.parent / "Info.plist"
+    )
+    rawtherapee_output_profile = rawtherapee_output_profile_for_executable(selected_rawtherapee)
     tools = {
         "exiftool": inspect_tool(
             ExternalTool(
@@ -248,11 +258,13 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
                 install_hint="Install with: brew install imagemagick",
             )
         ),
-        "rawtherapee": _rawtherapee_status(),
+        "rawtherapee": _rawtherapee_status(
+            executable=selected_rawtherapee, plist=rawtherapee_plist
+        ),
     }
-    camera_resources = inspect_camera_resources(executable=RAWTHERAPEE_CLI)
+    camera_resources = inspect_camera_resources(executable=selected_rawtherapee)
     lensfun_database = inspect_lensfun_database(
-        database=lensfun_database_for_executable(RAWTHERAPEE_CLI)
+        database=lensfun_database_for_executable(selected_rawtherapee)
     )
     raw_profile_status = _profile_status(DEFAULT_RAW_PROFILE)
     raw_profile_status["expected_sha256"] = EXPECTED_DEFAULT_RAW_PROFILE_SHA256

@@ -94,6 +94,30 @@ def test_doctor_does_not_substitute_path_tools_for_prepare_defaults(
     assert report["ready_for_raw"] is False
 
 
+def test_doctor_rejects_a_symlinked_rawtherapee_output_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "RawTherapee.app/Contents/MacOS/rawtherapee-cli"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    plist = executable.parent.parent / "Info.plist"
+    plist.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "5.13"}))
+    external_profile = tmp_path / "external.icc"
+    external_profile.write_bytes(b"test-profile")
+    output_profile = executable.parent.parent / "Resources/share/iccprofiles/output/RTv4_Large.icc"
+    output_profile.parent.mkdir(parents=True)
+    output_profile.symlink_to(external_profile)
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_CLI", executable)
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_PLIST", plist)
+
+    report = build_doctor_report(run_color_probe=False)
+
+    assert report["profiles"]["rawtherapee_output"]["available"] is False
+    assert report["profiles"]["rawtherapee_output"]["sha256"] is None
+    assert report["ready_for_raw"] is False
+
+
 def test_doctor_requires_parseable_camera_resources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

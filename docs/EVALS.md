@@ -19,9 +19,9 @@
 - RAW preparation rejects a caller-supplied PP3, and the version captured at the launch boundary must equal the supported 5.13 release.
 - Source format detection rejects symlinks and non-regular files before reading signature bytes; the copied PP3 hash must remain unchanged across RAW execution.
 - Lensfun inspection is derived from the selected RawTherapee bundle, searches and fingerprints every bundled XML file including third-party lens files, requires overlapping camera and lens mounts, and keeps the aggregate fingerprint unchanged during development.
-- Lensfun matching includes ExifTool's lens maker when present. If maker metadata is absent and the same normalized model/mount appears under multiple makers, the match is reported as ambiguous rather than selecting the first entry.
+- Lensfun matching includes ExifTool's lens maker when present. If maker metadata is absent and the same normalized model/mount appears under multiple makers, or multiple fully matching entries remain after maker filtering, the match is reported as ambiguous rather than selecting the first entry.
 - Lensfun camera/lens database matches and actual-application confirmation are separate fields; absent CLI confirmation must remain false.
-- RAW doctor readiness requires present camera-profile directories, a parseable alias map, structurally valid RawTherapee JSON-with-comments camera constants, and a complete parseable Lensfun XML set.
+- RAW doctor readiness requires present camera-profile directories, a regular non-symlink output profile, a parseable alias map, structurally valid RawTherapee JSON-with-comments camera constants, and a complete parseable Lensfun XML set.
 - Doctor evaluates the fixed ExifTool and ImageMagick paths used by default preparation; unrelated PATH-only installations cannot make readiness pass.
 - RAW doctor returns structured not-ready output rather than raising when RawTherapee application metadata is malformed or unreadable.
 - The expected `RTv4_Large` profile is derived from the selected RawTherapee bundle, fingerprinted across development, and required to match the developed TIFF's embedded ICC bytes.

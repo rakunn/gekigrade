@@ -42,7 +42,7 @@ def sha256_file(path: Path) -> str:
 
 
 def _profile_status(path: Path) -> dict[str, str | bool | None]:
-    exists = path.is_file()
+    exists = not path.is_symlink() and path.is_file()
     return {
         "available": exists,
         "path": str(path),

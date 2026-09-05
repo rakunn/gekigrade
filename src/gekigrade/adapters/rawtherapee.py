@@ -467,6 +467,9 @@ def inspect_lensfun_support(
     elif len({_normalized_equipment_name(match[1]) for match in lens_matches}) > 1:
         base["limitation"] = "Lensfun lens match is ambiguous across makers; LensMake is required"
         return base
+    if len(lens_matches) > 1:
+        base["limitation"] = "Lensfun lens match is ambiguous across duplicate entries"
+        return base
     if not lens_matches:
         return base
     lens, maker, lens_mounts = lens_matches[0]

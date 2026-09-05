@@ -504,3 +504,36 @@ def test_lensfun_support_uses_lens_maker_to_disambiguate_same_mount_models(
     assert ambiguous["lens_match"] is False
     assert ambiguous["lens_maker"] is None
     assert "ambiguous across makers" in ambiguous["limitation"]
+
+
+def test_lensfun_support_rejects_duplicate_fully_matching_entries(tmp_path: Path) -> None:
+    database = tmp_path / "lensfun"
+    database.mkdir()
+    (database / "duplicates.xml").write_text(
+        """<lensdatabase>
+<camera><maker>Sony</maker><model>ILCE-TEST</model><mount>Sony E</mount></camera>
+<lens><maker>Sigma</maker><model>Shared 24-70</model><mount>Sony E</mount>
+<calibration><distortion model="ptlens" focal="24" a="0" b="0" c="0"/></calibration>
+</lens>
+<lens><maker>Sigma</maker><model>Shared 24-70</model><mount>Sony E</mount>
+<calibration><vignetting model="pa" focal="24" aperture="2.8" distance="10"/></calibration>
+</lens>
+</lensdatabase>
+""",
+        encoding="utf-8",
+    )
+
+    result = inspect_lensfun_support(
+        {
+            "Make": "Sony",
+            "Model": "ILCE-TEST",
+            "LensMake": "Sigma",
+            "LensModel": "Shared 24-70",
+        },
+        database=database,
+    )
+
+    assert result["lens_match"] is False
+    assert result["lens_maker"] is None
+    assert result["supported"] == []
+    assert "duplicate entries" in result["limitation"]

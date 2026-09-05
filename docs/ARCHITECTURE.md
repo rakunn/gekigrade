@@ -10,6 +10,7 @@ flowchart LR
     UseCases --> Adapters[External-tool adapters]
     Adapters --> Exif[ExifTool]
     Adapters --> Magick[ImageMagick and LittleCMS]
+    Adapters --> RT[RawTherapee]
     Imaging --> OIIO[OpenImageIO and NumPy]
     Imaging --> OCIO[OpenColorIO]
     Domain --> Artifacts[Versioned JSON artifacts]
@@ -34,7 +35,7 @@ Each command validates the manifest and prerequisite artifact hashes before chan
 
 ## Staged processing
 
-The immutable working image is oriented and transformed to linear ACEScg before editable stages. A recipe then applies geometry, global correction, a creative look, an empty local-adjustment stage, crop, output transform, and export encoding. Operations state their units, valid ranges, and processing spaces. Preview and full resolution share this evaluator.
+JPEG input is oriented and transformed directly to linear ACEScg. Sony ARW input is developed by RawTherapee with isolated settings/cache directories and a copied, hashed PP3; its embedded `RTv4_Large` profile is then transformed to the same ACEScg contract. A recipe applies geometry, global correction, a creative look, an empty local-adjustment stage, crop, output transform, and export encoding. Operations state their units, valid ranges, and processing spaces. Preview and full resolution share this evaluator.
 
 ## Edit-plan boundary
 
@@ -43,6 +44,7 @@ Plans contain a schema version, source hash, and exactly three recipes. Each rec
 ## Data formats
 
 - JSON: UTF-8, canonicalized with sorted keys and compact separators before hashing.
+- RAW development output: 16-bit RGB TIFF with the hashed RawTherapee `RTv4_Large` ICC profile.
 - Working image: oriented 16-bit RGB TIFF with ACEScg ICC profile.
 - Preview and contact sheets: sRGB JPEG with ICC profile.
 - Histograms: fixed 256-bin integer arrays.
@@ -50,8 +52,8 @@ Plans contain a schema version, source hash, and exactly three recipes. Each rec
 
 ## Errors and security
 
-User or validation errors exit with code 2; missing dependencies with 3; processor failures with 4; fatal QA with 5. External tools run without a shell, with explicit timeouts, local temporary directories, safe environment variables, and captured stderr. Input is verified as a single JPEG by decoder and signature. Symlinks, path traversal, source/output overlap, and unprofiled CMYK are rejected.
+User or validation errors exit with code 2; missing dependencies with 3; processor failures with 4; fatal QA with 5. External tools run without a shell, with explicit timeouts, isolated state directories, safe environment variables, and captured stderr. JPEG input is verified by decoder and signature; ARW input requires its TIFF-based signature plus matching ExifTool type and MIME metadata. Symlinks, path traversal, source/output overlap, unsupported TIFFs, and unprofiled CMYK are rejected.
 
 ## Extension points
 
-A future RAW adapter produces the same working-image contract from an explicit PP3 profile. A future planner consumes current artifacts and emits the same plan contract. Local adjustments may be added only through a new schema version with typed masks in the same post-geometry coordinate system. No current abstraction downloads models or anticipates a UI.
+A replaceable RAW adapter now produces the same working-image contract from an explicit PP3 profile. A future planner consumes current artifacts and emits the same plan contract. Local adjustments may be added only through a new schema version with typed masks in the same post-geometry coordinate system. No current abstraction downloads models or anticipates a UI.

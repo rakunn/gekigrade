@@ -1,75 +1,337 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import shutil
 import subprocess
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import TypedDict
 
-from gekigrade.doctor import ACESCG_PROFILE, SRGB_PROFILE
+from gekigrade.adapters.tools import ExecutableSnapshotError, identity_bound_executable
+from gekigrade.doctor import (
+    ACESCG_PROFILE,
+    IMAGEMAGICK_CLI,
+    SRGB_PROFILE,
+)
+from gekigrade.doctor import MAGICK_ENVIRONMENT as _MAGICK_ENVIRONMENT
 
-MAGICK = Path("/opt/homebrew/bin/magick")
+MAGICK = IMAGEMAGICK_CLI
+PREVIEW_MAX_EDGE = 2048
+MAGICK_ENVIRONMENT = _MAGICK_ENVIRONMENT
 
 
 class ProcessorError(RuntimeError):
     """Raised when a deterministic external image processor fails."""
 
 
-def run_magick(arguments: list[str], *, timeout_seconds: float = 120.0) -> None:
-    if not MAGICK.is_file():
+class ProcessorIdentity(TypedDict):
+    name: str
+    path: str
+    version: str
+    executable_sha256: str
+    environment: dict[str, str]
+
+
+class ProcessorResult(ProcessorIdentity):
+    output_sha256: str
+
+
+def preview_dimensions(
+    width: int, height: int, *, max_edge: int = PREVIEW_MAX_EDGE
+) -> tuple[int, int]:
+    if width <= 0 or height <= 0 or max_edge <= 0:
+        raise ValueError("preview dimensions and maximum edge must be positive")
+    longest_edge = max(width, height)
+    if longest_edge <= max_edge:
+        return width, height
+
+    def scaled(value: int) -> int:
+        return max(1, (value * max_edge + longest_edge // 2) // longest_edge)
+
+    return scaled(width), scaled(height)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _file_identity(status: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
+
+
+def _bind_output(target: Path, identity: ProcessorIdentity) -> ProcessorResult:
+    if target.is_symlink():
+        target.unlink(missing_ok=True)
+        raise ProcessorError("ImageMagick output must be a regular, non-symlink file")
+    if not target.is_file():
+        raise ProcessorError("ImageMagick output must be a regular, non-symlink file")
+    try:
+        with target.open("rb") as stream:
+            opened_identity = _file_identity(os.fstat(stream.fileno()))
+            digest = hashlib.sha256()
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+            closed_identity = _file_identity(os.fstat(stream.fileno()))
+        path_identity = _file_identity(target.stat())
+    except OSError as exc:
+        target.unlink(missing_ok=True)
+        raise ProcessorError(f"ImageMagick output could not be secured: {exc}") from exc
+    if (
+        target.is_symlink()
+        or opened_identity != closed_identity
+        or path_identity != opened_identity
+    ):
+        target.unlink(missing_ok=True)
+        raise ProcessorError("ImageMagick output changed while it was fingerprinted")
+    return {**identity, "output_sha256": digest.hexdigest()}
+
+
+@contextmanager
+def _private_output_path(target: Path) -> Iterator[Path]:
+    if target.exists() or target.is_symlink():
+        raise ProcessorError(f"ImageMagick output already exists: {target}")
+    if target.parent.is_symlink() or not target.parent.is_dir():
+        raise ProcessorError("ImageMagick output directory is unavailable or unsafe")
+    try:
+        with tempfile.TemporaryDirectory(prefix=f".{target.name}.", dir=target.parent) as directory:
+            staged = Path(directory) / target.name
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            os.close(os.open(staged, flags, 0o600))
+            yield staged
+    except OSError as exc:
+        if target.is_symlink():
+            target.unlink(missing_ok=True)
+        raise ProcessorError(f"ImageMagick private output could not be secured: {exc}") from exc
+
+
+def _publish_output(staged: Path, target: Path, identity: ProcessorIdentity) -> ProcessorResult:
+    staged_result = _bind_output(staged, identity)
+    try:
+        staged.replace(target)
+    except OSError as exc:
+        staged.unlink(missing_ok=True)
+        if target.is_symlink():
+            target.unlink(missing_ok=True)
+        raise ProcessorError(f"ImageMagick output could not be published safely: {exc}") from exc
+    published_result = _bind_output(target, identity)
+    if published_result["output_sha256"] != staged_result["output_sha256"]:
+        target.unlink(missing_ok=True)
+        raise ProcessorError("ImageMagick output changed while it was published")
+    return published_result
+
+
+@contextmanager
+def _stable_profile_snapshots(target: Path, profiles: dict[str, Path]) -> Iterator[dict[str, Path]]:
+    snapshots: dict[str, Path] = {}
+    expected_hashes: dict[str, str] = {}
+    try:
+        for label, profile in profiles.items():
+            if profile.is_symlink() or not profile.is_file():
+                raise ProcessorError(f"{label} color profile is unavailable or unsafe")
+            expected_hash = _sha256(profile)
+            snapshot = target.parent / f".{target.name}.{label}-{expected_hash[:12]}.icc"
+            if snapshot.exists() or snapshot.is_symlink():
+                raise ProcessorError(f"{label} color profile snapshot already exists")
+            with profile.open("rb") as source, snapshot.open("xb") as destination:
+                snapshots[label] = snapshot
+                expected_hashes[label] = expected_hash
+                shutil.copyfileobj(source, destination)
+            if (
+                profile.is_symlink()
+                or _sha256(profile) != expected_hash
+                or _sha256(snapshot) != expected_hash
+            ):
+                raise ProcessorError(f"{label} color profile changed while it was copied")
+        yield snapshots
+        for label, snapshot in snapshots.items():
+            profile = profiles[label]
+            expected_hash = expected_hashes[label]
+            if (
+                snapshot.is_symlink()
+                or not snapshot.is_file()
+                or _sha256(snapshot) != expected_hash
+                or profile.is_symlink()
+                or not profile.is_file()
+                or _sha256(profile) != expected_hash
+            ):
+                raise ProcessorError(f"{label} color profile snapshot changed during processing")
+    except ProcessorError:
+        target.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        target.unlink(missing_ok=True)
+        raise ProcessorError(f"color profile snapshot could not be secured: {exc}") from exc
+    finally:
+        for snapshot in snapshots.values():
+            snapshot.unlink(missing_ok=True)
+
+
+def _magick_identity(
+    executable: Path,
+    *,
+    reported_path: Path | None = None,
+    expected_sha256: str | None = None,
+) -> ProcessorIdentity:
+    if not executable.is_file() or executable.stat().st_mode & 0o111 == 0:
         raise ProcessorError(
             "ImageMagick is unavailable; run `geki doctor` for installation guidance"
         )
+    resolved = executable.resolve(strict=True)
+    executable_sha256 = _sha256(resolved)
+    if expected_sha256 is not None and executable_sha256 != expected_sha256:
+        raise ProcessorError("ImageMagick executable snapshot has an unexpected digest")
     try:
         result = subprocess.run(
-            [str(MAGICK), *arguments],
+            [str(resolved), "-version"],
             capture_output=True,
             check=False,
             text=True,
-            timeout=timeout_seconds,
+            timeout=15,
             stdin=subprocess.DEVNULL,
+            env=MAGICK_ENVIRONMENT,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ProcessorError(f"ImageMagick could not complete: {exc}") from exc
-    if result.returncode != 0:
-        detail = result.stderr.strip() or "unknown ImageMagick error"
-        raise ProcessorError(f"ImageMagick failed: {detail}")
+        raise ProcessorError(f"ImageMagick version could not be inspected: {exc}") from exc
+    output = (result.stdout or result.stderr).strip().splitlines()
+    if result.returncode != 0 or not output:
+        detail = result.stderr.strip() or "version output was empty"
+        raise ProcessorError(f"ImageMagick version could not be inspected: {detail}")
+    if _sha256(resolved) != executable_sha256:
+        raise ProcessorError("ImageMagick executable changed during version inspection")
+    return {
+        "name": "ImageMagick",
+        "path": str(reported_path or resolved),
+        "version": output[0].strip(),
+        "executable_sha256": executable_sha256,
+        "environment": dict(MAGICK_ENVIRONMENT),
+    }
 
 
-def normalize_jpeg(source: Path, target: Path, *, has_profile: bool) -> None:
-    arguments = [str(source), "-auto-orient"]
+def run_magick(
+    arguments: list[str], *, executable: Path = MAGICK, timeout_seconds: float = 120.0
+) -> ProcessorIdentity:
+    try:
+        with identity_bound_executable(executable, label="ImageMagick") as bound:
+            identity = _magick_identity(
+                bound.path,
+                reported_path=bound.original_path,
+                expected_sha256=bound.sha256,
+            )
+            try:
+                result = subprocess.run(
+                    [str(bound.path), *arguments],
+                    capture_output=True,
+                    check=False,
+                    text=True,
+                    timeout=timeout_seconds,
+                    stdin=subprocess.DEVNULL,
+                    env=MAGICK_ENVIRONMENT,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise ProcessorError(f"ImageMagick could not complete: {exc}") from exc
+            if result.returncode != 0:
+                detail = result.stderr.strip() or "unknown ImageMagick error"
+                raise ProcessorError(f"ImageMagick failed: {detail}")
+        return identity
+    except ExecutableSnapshotError as exc:
+        raise ProcessorError(str(exc)) from exc
+
+
+def normalize_jpeg(
+    source: Path, target: Path, *, has_profile: bool, executable: Path = MAGICK
+) -> ProcessorResult:
+    required_profiles = {"working": ACESCG_PROFILE}
     if not has_profile:
-        arguments.extend(["-profile", str(SRGB_PROFILE)])
-    arguments.extend(
-        [
-            "-profile",
-            str(ACESCG_PROFILE),
-            "-alpha",
-            "off",
-            "-depth",
-            "16",
-            "-define",
-            "tiff:bits-per-sample=16",
-            "-compress",
-            "zip",
-            f"TIFF:{target}",
-        ]
-    )
-    run_magick(arguments)
+        required_profiles["assumed-input"] = SRGB_PROFILE
+    with _private_output_path(target) as staged:
+        with _stable_profile_snapshots(staged, required_profiles) as profiles:
+            arguments = [str(source), "-auto-orient"]
+            if not has_profile:
+                arguments.extend(["-profile", str(profiles["assumed-input"])])
+            arguments.extend(
+                [
+                    "-profile",
+                    str(profiles["working"]),
+                    "-alpha",
+                    "off",
+                    "-depth",
+                    "16",
+                    "-define",
+                    "tiff:bits-per-sample=16",
+                    "-compress",
+                    "zip",
+                    f"TIFF:{staged}",
+                ]
+            )
+            identity = run_magick(arguments, executable=executable)
+        return _publish_output(staged, target, identity)
 
 
-def make_preview(source: Path, target: Path, *, max_edge: int = 2048) -> None:
-    run_magick(
-        [
-            str(source),
-            "-profile",
-            str(SRGB_PROFILE),
-            "-resize",
-            f"{max_edge}x{max_edge}>",
-            "-strip",
-            "-profile",
-            str(SRGB_PROFILE),
-            "-sampling-factor",
-            "4:4:4",
-            "-quality",
-            "92",
-            f"JPEG:{target}",
-        ]
-    )
+def normalize_profiled_tiff(
+    source: Path, target: Path, *, executable: Path = MAGICK
+) -> ProcessorResult:
+    with _private_output_path(target) as staged:
+        with _stable_profile_snapshots(staged, {"working": ACESCG_PROFILE}) as profiles:
+            working_profile = str(profiles["working"])
+            identity = run_magick(
+                [
+                    str(source),
+                    "-auto-orient",
+                    "-profile",
+                    working_profile,
+                    "-alpha",
+                    "off",
+                    "-depth",
+                    "16",
+                    "-strip",
+                    "-profile",
+                    working_profile,
+                    "-define",
+                    "tiff:bits-per-sample=16",
+                    "-compress",
+                    "zip",
+                    f"TIFF:{staged}",
+                ],
+                executable=executable,
+            )
+        return _publish_output(staged, target, identity)
+
+
+def make_preview(
+    source: Path,
+    target: Path,
+    *,
+    max_edge: int = PREVIEW_MAX_EDGE,
+    executable: Path = MAGICK,
+) -> ProcessorResult:
+    with _private_output_path(target) as staged:
+        with _stable_profile_snapshots(staged, {"output": SRGB_PROFILE}) as profiles:
+            output_profile = str(profiles["output"])
+            identity = run_magick(
+                [
+                    str(source),
+                    "-profile",
+                    output_profile,
+                    "-resize",
+                    f"{max_edge}x{max_edge}>",
+                    "-strip",
+                    "-profile",
+                    output_profile,
+                    "-sampling-factor",
+                    "4:4:4",
+                    "-quality",
+                    "92",
+                    f"JPEG:{staged}",
+                ],
+                executable=executable,
+            )
+        return _publish_output(staged, target, identity)

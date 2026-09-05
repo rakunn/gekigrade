@@ -13,4 +13,4 @@ Verified on 2026-08-30 on Apple Silicon macOS (Darwin 25.6.0):
 
 `geki doctor` creates a temporary synthetic patch image, converts it twice from embedded sRGB JPEG to profile-tagged 16-bit ACEScg TIFF, and verifies identical TIFF file hashes. It also verifies the TIFF profile and an ACEScg → ACEScct → ACEScg OCIO round trip. The recorded RMSE for the final run was `3.4589840356951634e-06`. This proves the pinned components interoperate on this Mac; it is not a visual-quality evaluation.
 
-The JPEG dependency path is ready. RAW remains `installed-unverified-with-arw`. Lens correction, chromatic-aberration correction, camera-specific color, and cross-machine pixel identity are not proven.
+At the Milestone 0 checkpoint, the JPEG dependency path was ready and RAW remained `installed-unverified-with-arw`. Milestone 2 subsequently validated one private Sony ARW compatibility path; see [`RAW_MANUAL_TEST.md`](RAW_MANUAL_TEST.md). General camera color quality, confirmed automatic lens application, and cross-machine pixel identity remain unproven.

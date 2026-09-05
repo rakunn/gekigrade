@@ -23,6 +23,8 @@ from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
     EXPECTED_DEFAULT_RAW_PROFILE_SHA256,
     SUPPORTED_RAWTHERAPEE_VERSION,
+    CameraResourceStatus,
+    ResourceStatus,
     inspect_camera_resources,
     inspect_lensfun_database,
     lensfun_database_for_executable,
@@ -232,6 +234,9 @@ def build_doctor_report(
     *,
     run_color_probe: bool = True,
     rawtherapee_executable: Path | None = None,
+    raw_output_profile_status: dict[str, str | bool | None] | None = None,
+    raw_camera_resources_status: CameraResourceStatus | None = None,
+    raw_lensfun_database_status: ResourceStatus | None = None,
 ) -> dict[str, Any]:
     selected_rawtherapee = rawtherapee_executable or RAWTHERAPEE_CLI
     rawtherapee_plist = (
@@ -262,9 +267,17 @@ def build_doctor_report(
             executable=selected_rawtherapee, plist=rawtherapee_plist
         ),
     }
-    camera_resources = inspect_camera_resources(executable=selected_rawtherapee)
-    lensfun_database = inspect_lensfun_database(
-        database=lensfun_database_for_executable(selected_rawtherapee)
+    camera_resources = (
+        raw_camera_resources_status
+        if raw_camera_resources_status is not None
+        else inspect_camera_resources(executable=selected_rawtherapee)
+    )
+    lensfun_database = (
+        raw_lensfun_database_status
+        if raw_lensfun_database_status is not None
+        else inspect_lensfun_database(
+            database=lensfun_database_for_executable(selected_rawtherapee)
+        )
     )
     raw_profile_status = _profile_status(DEFAULT_RAW_PROFILE)
     raw_profile_status["expected_sha256"] = EXPECTED_DEFAULT_RAW_PROFILE_SHA256
@@ -275,7 +288,11 @@ def build_doctor_report(
         "acescg": _profile_status(ACESCG_PROFILE),
         "srgb": _profile_status(SRGB_PROFILE),
         "raw_development_pp3": raw_profile_status,
-        "rawtherapee_output": icc_profile_status(rawtherapee_output_profile),
+        "rawtherapee_output": (
+            raw_output_profile_status
+            if raw_output_profile_status is not None
+            else icc_profile_status(rawtherapee_output_profile)
+        ),
         "rawtherapee_camera_resources": camera_resources,
         "lensfun_database": lensfun_database,
     }

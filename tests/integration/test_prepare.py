@@ -768,6 +768,45 @@ def test_prepare_removes_manifest_if_developed_tiff_changes_while_published(
 
 
 @pytest.mark.parametrize(
+    ("resource", "message"),
+    [
+        ("camera", "camera resources changed while publishing"),
+        ("lensfun", "Lensfun database changed while publishing"),
+    ],
+)
+def test_prepare_removes_manifest_if_raw_resources_change_while_published(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resource: str,
+    message: str,
+) -> None:
+    source, exiftool, rawtherapee, lensfun = _raw_test_dependencies(tmp_path)
+    aliases = rawtherapee.parent.parent / "Resources/share/dcpprofiles/camera_model_aliases.json"
+    original_manifest = prepare_module._artifact_manifest
+
+    def change_resource_then_build_manifest(
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
+    ) -> dict[str, object]:
+        if resource == "camera":
+            aliases.write_text('{"UNRELATED": []}\n', encoding="utf-8")
+        else:
+            with (lensfun / "mil-sony.xml").open("a", encoding="utf-8") as stream:
+                stream.write("\n<!-- changed while publishing -->\n")
+        return original_manifest(job, metadata, **profile_hashes)
+
+    monkeypatch.setattr(prepare_module, "_artifact_manifest", change_resource_then_build_manifest)
+
+    with pytest.raises(RawTherapeeError, match=message):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+@pytest.mark.parametrize(
     ("profile_attribute", "system_profile"),
     [("ACESCG_PROFILE", ACESCG_PROFILE), ("SRGB_PROFILE", SRGB_PROFILE)],
 )

@@ -22,9 +22,14 @@ from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
     EXPECTED_DEFAULT_RAW_PROFILE_SHA256,
     RAWTHERAPEE_CLI,
+    CameraInputProfile,
+    CameraResourceStatus,
     RawTherapeeError,
+    ResourceStatus,
     develop_raw,
     inspect_camera_input_profile,
+    inspect_camera_resources,
+    inspect_lensfun_database,
     inspect_lensfun_support,
     lensfun_database_for_executable,
     rawtherapee_output_profile_for_executable,
@@ -517,10 +522,16 @@ def _artifact_manifest(
     working_profile_sha256: str,
     output_profile_sha256: str,
     raw_output_profile_status: dict[str, str | bool | None] | None = None,
+    raw_camera_resources_status: CameraResourceStatus | None = None,
+    raw_lensfun_database_status: ResourceStatus | None = None,
     rawtherapee_executable: Path | None = None,
 ) -> dict[str, Any]:
     doctor = build_doctor_report(
-        run_color_probe=False, rawtherapee_executable=rawtherapee_executable
+        run_color_probe=False,
+        rawtherapee_executable=rawtherapee_executable,
+        raw_output_profile_status=raw_output_profile_status,
+        raw_camera_resources_status=raw_camera_resources_status,
+        raw_lensfun_database_status=raw_lensfun_database_status,
     )
     doctor["profiles"]["acescg"] = {
         "available": True,
@@ -532,8 +543,6 @@ def _artifact_manifest(
         "path": str(SRGB_PROFILE),
         "sha256": output_profile_sha256,
     }
-    if raw_output_profile_status is not None:
-        doctor["profiles"]["rawtherapee_output"] = dict(raw_output_profile_status)
     artifacts: dict[str, dict[str, Any]] = {}
     for path in sorted(job.rglob("*")):
         if path.is_file() and path.name != "manifest.json":
@@ -586,6 +595,10 @@ def prepare_job(
     raw_profile_artifact: tuple[Path, str] | None = None
     raw_output_profile_artifact: tuple[Path, str] | None = None
     raw_output_profile_status: dict[str, str | bool | None] | None = None
+    raw_camera_input_profile: CameraInputProfile | None = None
+    raw_camera_resources_status: CameraResourceStatus | None = None
+    raw_lensfun_database_status: ResourceStatus | None = None
+    raw_lensfun_database_path: Path | None = None
     developed_artifact: tuple[Path, str] | None = None
     if source_format == "JPEG":
         normalization_tool = normalize_jpeg(
@@ -598,6 +611,7 @@ def prepare_job(
         raw_work = job / "intermediate/rawtherapee"
         developed = raw_work / "developed.tif"
         lensfun_database = lensfun_database_for_executable(rawtherapee_executable)
+        raw_lensfun_database_path = lensfun_database
         raw_output_profile = rawtherapee_output_profile_for_executable(rawtherapee_executable)
         raw_output_profile_status = icc_profile_status(raw_output_profile)
         if (
@@ -611,7 +625,13 @@ def prepare_job(
             raw_output_profile,
             expected_intermediate_profile_sha256,
         )
-        camera_input_profile = inspect_camera_input_profile(
+        raw_camera_resources_status = inspect_camera_resources(executable=rawtherapee_executable)
+        if not raw_camera_resources_status["ready"]:
+            raise RawTherapeeError("RawTherapee camera resources are not ready")
+        raw_lensfun_database_status = inspect_lensfun_database(database=lensfun_database)
+        if not raw_lensfun_database_status["ready"]:
+            raise RawTherapeeError("Lensfun database is not ready")
+        raw_camera_input_profile = inspect_camera_input_profile(
             source["capture_metadata"], executable=rawtherapee_executable
         )
         lens_correction = inspect_lensfun_support(
@@ -638,7 +658,7 @@ def prepare_job(
             inspect_camera_input_profile(
                 source["capture_metadata"], executable=rawtherapee_executable
             )
-            != camera_input_profile
+            != raw_camera_input_profile
         ):
             raise RawTherapeeError("RawTherapee camera input resources changed during development")
         if (
@@ -670,7 +690,7 @@ def prepare_job(
             "engine": "RawTherapee",
             "profile_path": str(result.profile_path.relative_to(job)),
             "profile_sha256": result.profile_sha256,
-            "camera_input_profile": camera_input_profile,
+            "camera_input_profile": raw_camera_input_profile,
             "run_report_path": str(result.report_path.relative_to(job)),
             "developed_tiff_sha256": result.output_sha256,
             "inspected_oriented_dimensions": inspected_oriented_dimensions,
@@ -763,6 +783,21 @@ def prepare_job(
         raise RawTherapeeError("RawTherapee output ICC profile changed before manifest publication")
     if developed_artifact is not None and not _artifact_matches(*developed_artifact):
         raise RawTherapeeError("developed TIFF changed before manifest publication")
+    if raw_camera_resources_status is not None and (
+        inspect_camera_resources(executable=rawtherapee_executable) != raw_camera_resources_status
+        or inspect_camera_input_profile(
+            source["capture_metadata"], executable=rawtherapee_executable
+        )
+        != raw_camera_input_profile
+    ):
+        raise RawTherapeeError("RawTherapee camera resources changed before manifest publication")
+    if (
+        raw_lensfun_database_status is not None
+        and raw_lensfun_database_path is not None
+        and inspect_lensfun_database(database=raw_lensfun_database_path)
+        != raw_lensfun_database_status
+    ):
+        raise RawTherapeeError("Lensfun database changed before manifest publication")
     if not _artifact_matches(ACESCG_PROFILE, working_profile_sha256) or not _artifact_matches(
         SRGB_PROFILE, output_profile_sha256
     ):
@@ -776,6 +811,8 @@ def prepare_job(
             working_profile_sha256=working_profile_sha256,
             output_profile_sha256=output_profile_sha256,
             raw_output_profile_status=raw_output_profile_status,
+            raw_camera_resources_status=raw_camera_resources_status,
+            raw_lensfun_database_status=raw_lensfun_database_status,
             rawtherapee_executable=(rawtherapee_executable if source_format == "ARW" else None),
         ),
     )
@@ -809,4 +846,21 @@ def prepare_job(
     if developed_artifact is not None and not _artifact_matches(*developed_artifact):
         manifest_path.unlink(missing_ok=True)
         raise RawTherapeeError("developed TIFF changed while publishing the manifest")
+    if raw_camera_resources_status is not None and (
+        inspect_camera_resources(executable=rawtherapee_executable) != raw_camera_resources_status
+        or inspect_camera_input_profile(
+            source["capture_metadata"], executable=rawtherapee_executable
+        )
+        != raw_camera_input_profile
+    ):
+        manifest_path.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee camera resources changed while publishing the manifest")
+    if (
+        raw_lensfun_database_status is not None
+        and raw_lensfun_database_path is not None
+        and inspect_lensfun_database(database=raw_lensfun_database_path)
+        != raw_lensfun_database_status
+    ):
+        manifest_path.unlink(missing_ok=True)
+        raise RawTherapeeError("Lensfun database changed while publishing the manifest")
     return job

@@ -20,9 +20,7 @@ from gekigrade.domain.jsonio import write_json
 RAWTHERAPEE_CLI = Path("/Applications/RawTherapee.app/Contents/MacOS/rawtherapee-cli")
 SUPPORTED_RAWTHERAPEE_VERSION = "5.13"
 DEFAULT_RAW_PROFILE = Path(__file__).parent.parent / "raw_profiles/neutral-v1.pp3"
-LENSFUN_DATABASE = Path(
-    "/Applications/RawTherapee.app/Contents/Resources/share/lensfun/mil-sony.xml"
-)
+LENSFUN_DATABASE = Path("/Applications/RawTherapee.app/Contents/Resources/share/lensfun")
 RAWTHERAPEE_OUTPUT_PROFILE = Path(
     "/Applications/RawTherapee.app/Contents/Resources/share/iccprofiles/output/RTv4_Large.icc"
 )
@@ -32,9 +30,15 @@ class RawTherapeeError(RuntimeError):
     """Raised when deterministic RAW development cannot be completed safely."""
 
 
+class FingerprintedFile(TypedDict):
+    path: str
+    sha256: str
+
+
 class LensfunSupport(TypedDict):
     database_path: str
     database_sha256: str | None
+    database_files: list[FingerprintedFile]
     camera_match: bool
     lens_match: bool
     requested: list[str]
@@ -55,6 +59,27 @@ class CameraInputProfile(TypedDict):
     aliases_sha256: str
     camera_constants_path: str
     camera_constants_sha256: str
+
+
+class ResourceStatus(TypedDict):
+    available: bool
+    ready: bool
+    path: str
+    sha256: str | None
+    files: list[FingerprintedFile]
+    error: str | None
+
+
+class CameraResourceStatus(TypedDict):
+    available: bool
+    ready: bool
+    dcp_directory: str
+    input_icc_directory: str
+    aliases_path: str
+    aliases_sha256: str | None
+    camera_constants_path: str
+    camera_constants_sha256: str | None
+    error: str | None
 
 
 @dataclass(frozen=True)
@@ -105,34 +130,119 @@ def _find_profile(directory: Path, profile_key: str, suffixes: set[str]) -> Path
     return matches[0] if matches else None
 
 
+def _camera_resource_paths(executable: Path) -> tuple[Path, Path, Path, Path]:
+    resources = executable.resolve(strict=True).parent.parent / "Resources/share"
+    dcp_directory = resources / "dcpprofiles"
+    icc_directory = resources / "iccprofiles/input"
+    aliases_path = dcp_directory / "camera_model_aliases.json"
+    camera_constants_path = resources / "camconst.json"
+    return dcp_directory, icc_directory, aliases_path, camera_constants_path
+
+
+def _load_json_object(path: Path, label: str) -> dict[object, object]:
+    if path.is_symlink() or not path.is_file():
+        raise RawTherapeeError(f"RawTherapee {label} is unavailable: {path}")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RawTherapeeError(f"RawTherapee {label} cannot be parsed: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RawTherapeeError(f"RawTherapee {label} must be a JSON object")
+    return value
+
+
+def _load_camera_aliases(path: Path) -> dict[str, list[str]]:
+    value = _load_json_object(path, "camera aliases")
+    aliases: dict[str, list[str]] = {}
+    for canonical, alias_values in value.items():
+        if (
+            not isinstance(canonical, str)
+            or not isinstance(alias_values, list)
+            or not all(isinstance(alias, str) for alias in alias_values)
+        ):
+            raise RawTherapeeError("RawTherapee camera aliases contain an invalid entry")
+        aliases[canonical] = alias_values
+    return aliases
+
+
+def inspect_camera_resources(*, executable: Path = RAWTHERAPEE_CLI) -> CameraResourceStatus:
+    try:
+        dcp_directory, icc_directory, aliases_path, camera_constants_path = _camera_resource_paths(
+            executable
+        )
+    except (OSError, RuntimeError) as exc:
+        unresolved = executable.resolve(strict=False).parent.parent / "Resources/share"
+        return {
+            "available": False,
+            "ready": False,
+            "dcp_directory": str(unresolved / "dcpprofiles"),
+            "input_icc_directory": str(unresolved / "iccprofiles/input"),
+            "aliases_path": str(unresolved / "dcpprofiles/camera_model_aliases.json"),
+            "aliases_sha256": None,
+            "camera_constants_path": str(unresolved / "camconst.json"),
+            "camera_constants_sha256": None,
+            "error": f"RawTherapee executable cannot be resolved: {exc}",
+        }
+    base: CameraResourceStatus = {
+        "available": False,
+        "ready": False,
+        "dcp_directory": str(dcp_directory),
+        "input_icc_directory": str(icc_directory),
+        "aliases_path": str(aliases_path),
+        "aliases_sha256": None,
+        "camera_constants_path": str(camera_constants_path),
+        "camera_constants_sha256": None,
+        "error": None,
+    }
+    if (
+        dcp_directory.is_symlink()
+        or not dcp_directory.is_dir()
+        or icc_directory.is_symlink()
+        or not icc_directory.is_dir()
+    ):
+        base["error"] = "RawTherapee camera profile directories are unavailable"
+        return base
+    base["available"] = aliases_path.is_file() and camera_constants_path.is_file()
+    try:
+        _load_camera_aliases(aliases_path)
+        if camera_constants_path.is_symlink() or not camera_constants_path.is_file():
+            raise RawTherapeeError(
+                f"RawTherapee camera constants are unavailable: {camera_constants_path}"
+            )
+        base["aliases_sha256"] = _sha256(aliases_path)
+        base["camera_constants_sha256"] = _sha256(camera_constants_path)
+    except (OSError, RawTherapeeError) as exc:
+        base["error"] = str(exc)
+        return base
+    base["ready"] = True
+    return base
+
+
 def inspect_camera_input_profile(
     metadata: dict[str, object], *, executable: Path = RAWTHERAPEE_CLI
 ) -> CameraInputProfile:
     camera_make_model = f"{metadata.get('Make', '')} {metadata.get('Model', '')}".strip()
     if not camera_make_model:
         raise RawTherapeeError("camera make and model are required to resolve the input profile")
-    resources = executable.resolve(strict=True).parent.parent / "Resources/share"
-    dcp_directory = resources / "dcpprofiles"
-    icc_directory = resources / "iccprofiles/input"
-    aliases_path = dcp_directory / "camera_model_aliases.json"
-    camera_constants_path = resources / "camconst.json"
-    for path in (aliases_path, camera_constants_path):
-        if path.is_symlink() or not path.is_file():
-            raise RawTherapeeError(f"RawTherapee camera resource is unavailable: {path}")
-    if not dcp_directory.is_dir() or not icc_directory.is_dir():
+    dcp_directory, icc_directory, aliases_path, camera_constants_path = _camera_resource_paths(
+        executable
+    )
+    if (
+        dcp_directory.is_symlink()
+        or not dcp_directory.is_dir()
+        or icc_directory.is_symlink()
+        or not icc_directory.is_dir()
+    ):
         raise RawTherapeeError("RawTherapee camera profile directories are unavailable")
-    try:
-        aliases = json.loads(aliases_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise RawTherapeeError(f"RawTherapee camera aliases cannot be parsed: {exc}") from exc
-    if not isinstance(aliases, dict):
-        raise RawTherapeeError("RawTherapee camera aliases must be a JSON object")
+    aliases = _load_camera_aliases(aliases_path)
+    if camera_constants_path.is_symlink() or not camera_constants_path.is_file():
+        raise RawTherapeeError(
+            f"RawTherapee camera constants are unavailable: {camera_constants_path}"
+        )
     profile_key = camera_make_model
     wanted = camera_make_model.casefold()
     for canonical, alias_values in aliases.items():
-        if not isinstance(canonical, str) or not isinstance(alias_values, list):
-            raise RawTherapeeError("RawTherapee camera aliases contain an invalid entry")
-        candidates = [canonical, *(value for value in alias_values if isinstance(value, str))]
+        candidates = [canonical, *alias_values]
         if any(candidate.casefold() == wanted for candidate in candidates):
             profile_key = canonical
             break
@@ -155,12 +265,64 @@ def inspect_camera_input_profile(
     }
 
 
+def _lensfun_files(database: Path) -> tuple[Path, list[Path]]:
+    if database.is_symlink() or not database.is_dir():
+        raise RawTherapeeError("Lensfun database directory is unavailable")
+    root = database.resolve(strict=True)
+    candidates = sorted(root.rglob("*.xml"))
+    if not candidates:
+        raise RawTherapeeError("Lensfun database contains no XML files")
+    if any(path.is_symlink() or not path.is_file() for path in candidates):
+        raise RawTherapeeError("Lensfun database contains an unsafe XML path")
+    return root, candidates
+
+
+def _collection_fingerprint(root: Path, paths: list[Path]) -> tuple[str, list[FingerprintedFile]]:
+    digest = hashlib.sha256()
+    files: list[FingerprintedFile] = []
+    for path in paths:
+        file_sha256 = _sha256(path)
+        relative = path.relative_to(root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file_sha256.encode("ascii"))
+        digest.update(b"\n")
+        files.append({"path": str(path), "sha256": file_sha256})
+    return digest.hexdigest(), files
+
+
+def inspect_lensfun_database(*, database: Path = LENSFUN_DATABASE) -> ResourceStatus:
+    base: ResourceStatus = {
+        "available": database.is_dir() and not database.is_symlink(),
+        "ready": False,
+        "path": str(database),
+        "sha256": None,
+        "files": [],
+        "error": None,
+    }
+    try:
+        root, paths = _lensfun_files(database)
+        database_sha256, files = _collection_fingerprint(root, paths)
+        for path in paths:
+            ET.parse(path)
+    except (OSError, ET.ParseError, RawTherapeeError) as exc:
+        base["error"] = str(exc)
+        return base
+    base["path"] = str(root)
+    base["sha256"] = database_sha256
+    base["files"] = files
+    base["ready"] = True
+    return base
+
+
 def inspect_lensfun_support(
     metadata: dict[str, object], *, database: Path = LENSFUN_DATABASE
 ) -> LensfunSupport:
+    database_status = inspect_lensfun_database(database=database)
     base: LensfunSupport = {
-        "database_path": str(database),
-        "database_sha256": _sha256(database) if database.is_file() else None,
+        "database_path": database_status["path"],
+        "database_sha256": database_status["sha256"],
+        "database_files": database_status["files"],
         "camera_match": False,
         "lens_match": False,
         "requested": ["distortion", "vignetting"],
@@ -171,39 +333,41 @@ def inspect_lensfun_support(
             "RawTherapee CLI does not report whether an automatic Lensfun correction was applied"
         ),
     }
-    if not database.is_file():
-        base["limitation"] = "Lensfun database is unavailable; correction support is unknown"
-        return base
-    try:
-        root = ET.parse(database).getroot()
-    except (OSError, ET.ParseError):
-        base["limitation"] = "Lensfun database could not be parsed; correction support is unknown"
+    if not database_status["ready"]:
+        detail = database_status["error"] or "unknown database error"
+        base["limitation"] = f"Lensfun database is unavailable: {detail}"
         return base
 
     wanted_make = _normalized_equipment_name(metadata.get("Make", ""))
     wanted_camera = _normalized_equipment_name(metadata.get("Model", ""))
     wanted_lens = _normalized_equipment_name(metadata.get("LensModel", ""))
-    for camera in root.findall("camera"):
-        make = _normalized_equipment_name(camera.findtext("maker", ""))
-        model = _normalized_equipment_name(camera.findtext("model", ""))
-        if wanted_make == make and wanted_camera == model:
-            base["camera_match"] = True
-            break
-    for lens in root.findall("lens"):
-        model = _normalized_equipment_name(lens.findtext("model", ""))
-        if wanted_lens and wanted_lens == model:
-            base["lens_match"] = True
-            calibration = lens.find("calibration")
-            if calibration is not None:
-                base["supported"] = sorted(
-                    {
-                        child.tag
-                        for child in calibration
-                        if child.tag in {"distortion", "vignetting"}
-                    }
-                )
-            base["all_requested_supported"] = set(base["requested"]).issubset(base["supported"])
-            break
+    for item in database_status["files"]:
+        root = ET.parse(item["path"]).getroot()
+        if not base["camera_match"]:
+            for camera in root.findall("camera"):
+                make = _normalized_equipment_name(camera.findtext("maker", ""))
+                model = _normalized_equipment_name(camera.findtext("model", ""))
+                if wanted_make == make and wanted_camera == model:
+                    base["camera_match"] = True
+                    break
+        if not base["lens_match"]:
+            for lens in root.findall("lens"):
+                model = _normalized_equipment_name(lens.findtext("model", ""))
+                if wanted_lens and wanted_lens == model:
+                    base["lens_match"] = True
+                    calibration = lens.find("calibration")
+                    if calibration is not None:
+                        base["supported"] = sorted(
+                            {
+                                child.tag
+                                for child in calibration
+                                if child.tag in {"distortion", "vignetting"}
+                            }
+                        )
+                    base["all_requested_supported"] = set(base["requested"]).issubset(
+                        base["supported"]
+                    )
+                    break
     return base
 
 
@@ -276,6 +440,8 @@ def develop_raw(
     environment["RT_SETTINGS"] = str(settings)
     environment["RT_CACHE"] = str(cache)
     before = _sha256(source)
+    tool_version = _tool_version(executable)
+    executable_sha256 = _sha256(executable)
     started = time.monotonic()
     try:
         completed = subprocess.run(
@@ -298,13 +464,20 @@ def develop_raw(
         execution_error = str(exc)
 
     after = _sha256(source)
+    tool_version_after = _tool_version(executable)
+    try:
+        executable_sha256_after = _sha256(executable)
+    except OSError:
+        executable_sha256_after = None
     report_path = work_directory / "run.json"
     report = {
         "schema_version": "1.0.0",
         "tool": "RawTherapee",
-        "tool_version": _tool_version(executable),
+        "tool_version": tool_version,
+        "tool_version_after": tool_version_after,
         "executable": str(executable),
-        "executable_sha256": _sha256(executable),
+        "executable_sha256": executable_sha256,
+        "executable_sha256_after": executable_sha256_after,
         "arguments": arguments[1:],
         "environment": {"RT_SETTINGS": str(settings), "RT_CACHE": str(cache)},
         "duration_seconds": round(time.monotonic() - started, 6),
@@ -321,6 +494,9 @@ def develop_raw(
     if before != after:
         target.unlink(missing_ok=True)
         raise RawTherapeeError("source RAW changed while RawTherapee was running")
+    if tool_version_after != tool_version or executable_sha256_after != executable_sha256:
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee executable changed while it was running")
     if execution_error is not None:
         target.unlink(missing_ok=True)
         raise RawTherapeeError(f"RawTherapee could not complete: {execution_error}")

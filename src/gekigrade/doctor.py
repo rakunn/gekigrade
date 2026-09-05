@@ -20,6 +20,8 @@ from gekigrade.adapters.rawtherapee import (
     LENSFUN_DATABASE,
     RAWTHERAPEE_OUTPUT_PROFILE,
     SUPPORTED_RAWTHERAPEE_VERSION,
+    inspect_camera_resources,
+    inspect_lensfun_database,
 )
 from gekigrade.adapters.tools import ExternalTool, ToolStatus, inspect_tool
 
@@ -140,12 +142,15 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
         ),
         "rawtherapee": _rawtherapee_status(),
     }
+    camera_resources = inspect_camera_resources(executable=RAWTHERAPEE_CLI)
+    lensfun_database = inspect_lensfun_database(database=LENSFUN_DATABASE)
     profiles = {
         "acescg": _profile_status(ACESCG_PROFILE),
         "srgb": _profile_status(SRGB_PROFILE),
         "raw_development_pp3": _profile_status(DEFAULT_RAW_PROFILE),
         "rawtherapee_output": _profile_status(RAWTHERAPEE_OUTPUT_PROFILE),
-        "lensfun_database": _profile_status(LENSFUN_DATABASE),
+        "rawtherapee_camera_resources": camera_resources,
+        "lensfun_database": lensfun_database,
     }
     prerequisites_ready = (
         tools["exiftool"].available
@@ -163,7 +168,8 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
         and tools["rawtherapee"].version == SUPPORTED_RAWTHERAPEE_VERSION
         and profiles["raw_development_pp3"]["available"] is True
         and profiles["rawtherapee_output"]["available"] is True
-        and profiles["lensfun_database"]["available"] is True
+        and camera_resources["ready"]
+        and lensfun_database["ready"]
     )
     return {
         "schema_version": "1.0.0",

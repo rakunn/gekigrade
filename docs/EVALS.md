@@ -13,7 +13,10 @@
 - RAW output must be exactly three-channel RGB with 16-bit samples, profile-tagged, correctly oriented, and admitted to ACEScg only after the intermediate profile is verified.
 - RAW metadata inspection hashes the source before ExifTool and rejects any change detected immediately afterward.
 - RawTherapee camera-input provenance records the selected DCP or ICC profile, or the camera-matrix fallback, together with camera-alias and camera-constants hashes; the resource fingerprint must remain unchanged during development.
+- RawTherapee executable version and file hash are captured before launch and must remain unchanged after exit.
+- Lensfun inspection searches and fingerprints every bundled XML file, including third-party lens files; the aggregate fingerprint must remain unchanged during development.
 - Lensfun camera/lens database matches and actual-application confirmation are separate fields; absent CLI confirmation must remain false.
+- RAW doctor readiness requires present camera-profile directories, a parseable alias map, camera constants, and a complete parseable Lensfun XML set.
 - Cross-platform decoded 8-bit output allows maximum channel difference 1 and RMSE 0.25; file-byte equality is not promised across encoders.
 - Manifest records source, schema, plan, recipe, tool, profile, intermediate, candidate, selection, master, and derivative provenance.
 

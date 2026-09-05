@@ -112,8 +112,9 @@ print("fake ARW developed")
     )
     profile = tmp_path / "neutral.pp3"
     profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
-    lensfun = tmp_path / "mil-sony.xml"
-    lensfun.write_text(
+    lensfun = tmp_path / "lensfun"
+    lensfun.mkdir()
+    (lensfun / "mil-sony.xml").write_text(
         """<lensdatabase>
 <camera><maker>SONY</maker><model>ILCE-TEST</model></camera>
 <lens><maker>Sony</maker><model>FE TEST</model></lens>
@@ -245,6 +246,9 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     assert development["lens_correction"]["camera_match"] is True
     assert development["lens_correction"]["lens_match"] is True
     assert development["lens_correction"]["application_confirmed"] is False
+    assert [
+        Path(item["path"]).name for item in development["lens_correction"]["database_files"]
+    ] == ["mil-sony.xml"]
     with Image.open(job / "intermediate/working.tif") as working:
         assert working.size == (180, 120)
         assert working.info.get("icc_profile")
@@ -291,6 +295,35 @@ def test_prepare_rechecks_the_raw_source_before_success(
     monkeypatch.setattr(prepare_module, "make_preview", make_preview_then_change_source)
 
     with pytest.raises(RawTherapeeError, match="changed during job preparation"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+            raw_profile=profile,
+            raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
+            lensfun_database=lensfun,
+        )
+
+
+def test_prepare_rejects_a_lensfun_database_changed_during_development(tmp_path: Path) -> None:
+    source, exiftool, rawtherapee, profile, lensfun = _raw_test_dependencies(tmp_path)
+    lensfun_file = lensfun / "mil-sony.xml"
+    _write_executable(
+        rawtherapee,
+        f"""#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+with pathlib.Path({str(lensfun_file)!r}).open("a", encoding="utf-8") as stream:
+    stream.write("\\n<!-- changed during development -->\\n")
+""",
+    )
+
+    with pytest.raises(RawTherapeeError, match="Lensfun database changed"):
         prepare_job(
             source,
             tmp_path / "raw-job",

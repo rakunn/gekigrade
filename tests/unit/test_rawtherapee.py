@@ -108,7 +108,9 @@ print("processed deterministically")
     assert report["source_sha256_before"] == before
     assert report["source_sha256_after"] == before
     assert report["executable_sha256"] == _sha256(executable)
+    assert report["executable_sha256_after"] == _sha256(executable)
     assert report["tool_version"] == "5.13"
+    assert report["tool_version_after"] == "5.13"
 
 
 def test_develop_raw_surfaces_failure_and_does_not_admit_partial_output(tmp_path: Path) -> None:
@@ -175,6 +177,40 @@ shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1])
         )
 
     assert not (tmp_path / "rawtherapee").exists()
+
+
+def test_develop_raw_rejects_an_executable_changed_during_the_run(tmp_path: Path) -> None:
+    source = tmp_path / "photo.arw"
+    _write_uint16_tiff(source)
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        """#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+with pathlib.Path(sys.argv[0]).open("a", encoding="utf-8") as stream:
+    stream.write("# replaced during run\\n")
+""",
+    )
+    work = tmp_path / "rawtherapee"
+    target = work / "developed.tif"
+
+    with pytest.raises(RawTherapeeError, match="executable changed"):
+        develop_raw(
+            source,
+            target,
+            work_directory=work,
+            profile=profile,
+            executable=executable,
+        )
+
+    assert not target.exists()
 
 
 def test_develop_raw_rejects_an_eight_bit_tiff_output(tmp_path: Path) -> None:
@@ -265,11 +301,20 @@ def test_camera_input_profile_records_matrix_fallback_resources(tmp_path: Path) 
 
 
 def test_lensfun_support_reports_matches_without_claiming_application(tmp_path: Path) -> None:
-    database = tmp_path / "mil-sony.xml"
-    database.write_text(
+    database = tmp_path / "lensfun"
+    database.mkdir()
+    camera_database = database / "mil-sony.xml"
+    camera_database.write_text(
         """<lensdatabase>
 <camera><maker>Sony</maker><model>ILCE-TEST</model><mount>Sony E</mount></camera>
-<lens><maker>Sony</maker><model>FE 24-70mm f/2.8 GM II</model><mount>Sony E</mount>
+</lensdatabase>
+""",
+        encoding="utf-8",
+    )
+    lens_database = database / "mil-sigma.xml"
+    lens_database.write_text(
+        """<lensdatabase>
+<lens><maker>Sigma</maker><model>24-70mm F2.8 DG DN II Art</model><mount>Sony E</mount>
 <calibration><distortion model="ptlens" focal="24" a="0" b="0" c="0"/></calibration>
 </lens>
 </lensdatabase>
@@ -278,11 +323,23 @@ def test_lensfun_support_reports_matches_without_claiming_application(tmp_path: 
     )
 
     result = inspect_lensfun_support(
-        {"Make": "SONY", "Model": "ILCE-TEST", "LensModel": "FE 24-70mm F2.8 GM II"},
+        {
+            "Make": "SONY",
+            "Model": "ILCE-TEST",
+            "LensModel": "24-70mm F2.8 DG DN II Art",
+        },
         database=database,
     )
 
-    assert result["database_sha256"] == _sha256(database)
+    assert result["database_sha256"]
+    assert {Path(item["path"]).name for item in result["database_files"]} == {
+        "mil-sony.xml",
+        "mil-sigma.xml",
+    }
+    assert {item["sha256"] for item in result["database_files"]} == {
+        _sha256(camera_database),
+        _sha256(lens_database),
+    }
     assert result["camera_match"] is True
     assert result["lens_match"] is True
     assert result["requested"] == ["distortion", "vignetting"]

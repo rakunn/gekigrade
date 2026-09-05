@@ -324,6 +324,11 @@ def prepare_job(
         camera_input_profile = inspect_camera_input_profile(
             source["capture_metadata"], executable=rawtherapee_executable
         )
+        lens_correction = inspect_lensfun_support(
+            source["capture_metadata"], database=lensfun_database
+        )
+        if lens_correction["database_sha256"] is None:
+            raise RawTherapeeError("Lensfun database cannot be fingerprinted")
         result = develop_raw(
             source_path,
             developed,
@@ -340,6 +345,11 @@ def prepare_job(
             != camera_input_profile
         ):
             raise RawTherapeeError("RawTherapee camera input resources changed during development")
+        if (
+            inspect_lensfun_support(source["capture_metadata"], database=lensfun_database)
+            != lens_correction
+        ):
+            raise RawTherapeeError("Lensfun database changed during RAW development")
         intermediate_profile = _embedded_profile(developed)
         if not raw_output_profile.is_file():
             raise RuntimeError("expected RawTherapee output ICC profile is unavailable")
@@ -372,9 +382,7 @@ def prepare_job(
                 "denoising": False,
                 "sharpening": False,
             },
-            "lens_correction": inspect_lensfun_support(
-                source["capture_metadata"], database=lensfun_database
-            ),
+            "lens_correction": lens_correction,
         }
     make_preview(working, preview)
     pixels = _load_srgb(preview)

@@ -297,7 +297,6 @@ def prepare_job(
     *,
     exiftool_executable: Path = EXIFTOOL,
     rawtherapee_executable: Path = RAWTHERAPEE_CLI,
-    raw_profile: Path = DEFAULT_RAW_PROFILE,
     raw_output_profile: Path = RAWTHERAPEE_OUTPUT_PROFILE,
 ) -> Path:
     with source_path.open("rb") as stream:
@@ -333,7 +332,7 @@ def prepare_job(
             source_path,
             developed,
             work_directory=raw_work,
-            profile=raw_profile,
+            profile=DEFAULT_RAW_PROFILE,
             executable=rawtherapee_executable,
         )
         if result.source_sha256 != source["source_sha256"]:

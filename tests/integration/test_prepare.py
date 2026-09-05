@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import plistlib
 import shutil
@@ -15,7 +16,7 @@ from PIL import Image
 import gekigrade.pipeline.prepare as prepare_module
 from gekigrade.adapters.imagemagick import make_preview as real_make_preview
 from gekigrade.adapters.imagemagick import normalize_profiled_tiff as real_normalize_profiled_tiff
-from gekigrade.adapters.rawtherapee import RawTherapeeError
+from gekigrade.adapters.rawtherapee import DEFAULT_RAW_PROFILE, RawTherapeeError
 from gekigrade.domain.models import EditPlan
 from gekigrade.domain.paths import create_job_directory as real_create_job_directory
 from gekigrade.pipeline.prepare import inspect_photo, prepare_job
@@ -47,7 +48,7 @@ def _write_rawtherapee_app(root: Path, source: str) -> Path:
     return executable
 
 
-def _raw_test_dependencies(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
+def _raw_test_dependencies(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     source = tmp_path / "camera.ARW"
     srgb_profile = Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc")
     unprofiled_source = tmp_path / "camera-unprofiled.tif"
@@ -112,8 +113,6 @@ shutil.copyfile(source, target)
 print("fake ARW developed")
 """,
     )
-    profile = tmp_path / "neutral.pp3"
-    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
     lensfun = rawtherapee.parent.parent / "Resources/share/lensfun"
     lensfun.mkdir()
     (lensfun / "mil-sony.xml").write_text(
@@ -124,7 +123,7 @@ print("fake ARW developed")
 """,
         encoding="utf-8",
     )
-    return source, exiftool, rawtherapee, profile, lensfun
+    return source, exiftool, rawtherapee, lensfun
 
 
 def test_prepare_builds_a_complete_oriented_profiled_job_without_touching_source(
@@ -206,7 +205,7 @@ def test_prepare_rejects_non_jpeg_before_creating_job(tmp_path: Path) -> None:
 def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     tmp_path: Path,
 ) -> None:
-    source, exiftool, rawtherapee, profile, lensfun = _raw_test_dependencies(tmp_path)
+    source, exiftool, rawtherapee, lensfun = _raw_test_dependencies(tmp_path)
     before = _sha256(source)
     job = tmp_path / "raw-job"
 
@@ -215,7 +214,6 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
         job,
         exiftool_executable=exiftool,
         rawtherapee_executable=rawtherapee,
-        raw_profile=profile,
         raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
     )
 
@@ -227,7 +225,7 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     assert metadata["capture_metadata"]["Model"] == "ILCE-TEST"
     development = metadata["raw_development"]
     assert development["engine"] == "RawTherapee"
-    assert development["profile_sha256"] == _sha256(profile)
+    assert development["profile_sha256"] == _sha256(DEFAULT_RAW_PROFILE)
     camera_input = development["camera_input_profile"]
     expected_dcp = rawtherapee.parent.parent / "Resources/share/dcpprofiles/SONY ILCE-TEST.dcp"
     assert camera_input["selection"] == "auto-matched-camera-profile"
@@ -259,10 +257,14 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     assert manifest["artifacts"]["intermediate/rawtherapee/development.pp3"]["sha256"]
 
 
+def test_prepare_does_not_expose_a_raw_profile_override() -> None:
+    assert "raw_profile" not in inspect.signature(prepare_job).parameters
+
+
 def test_prepare_rejects_a_raw_source_changed_after_inspection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source, exiftool, rawtherapee, profile, _ = _raw_test_dependencies(tmp_path)
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
 
     def create_job_then_change_source(source_path: Path, output_path: Path) -> Path:
         job = real_create_job_directory(source_path, output_path)
@@ -278,7 +280,6 @@ def test_prepare_rejects_a_raw_source_changed_after_inspection(
             tmp_path / "raw-job",
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
-            raw_profile=profile,
             raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
         )
 
@@ -286,7 +287,7 @@ def test_prepare_rejects_a_raw_source_changed_after_inspection(
 def test_prepare_rechecks_the_raw_source_before_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source, exiftool, rawtherapee, profile, _ = _raw_test_dependencies(tmp_path)
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
 
     def make_preview_then_change_source(working: Path, preview: Path) -> None:
         real_make_preview(working, preview)
@@ -301,7 +302,6 @@ def test_prepare_rechecks_the_raw_source_before_success(
             tmp_path / "raw-job",
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
-            raw_profile=profile,
             raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
         )
     assert not (tmp_path / "raw-job/manifest.json").exists()
@@ -310,7 +310,7 @@ def test_prepare_rechecks_the_raw_source_before_success(
 def test_prepare_removes_a_manifest_if_the_raw_changes_while_it_is_published(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source, exiftool, rawtherapee, profile, _ = _raw_test_dependencies(tmp_path)
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
     original_manifest = prepare_module._artifact_manifest
 
     def build_manifest_then_change_source(
@@ -329,14 +329,13 @@ def test_prepare_removes_a_manifest_if_the_raw_changes_while_it_is_published(
             tmp_path / "raw-job",
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
-            raw_profile=profile,
             raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
         )
     assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
 def test_prepare_rejects_a_lensfun_database_changed_during_development(tmp_path: Path) -> None:
-    source, exiftool, rawtherapee, profile, lensfun = _raw_test_dependencies(tmp_path)
+    source, exiftool, rawtherapee, lensfun = _raw_test_dependencies(tmp_path)
     lensfun_file = lensfun / "mil-sony.xml"
     _write_executable(
         rawtherapee,
@@ -358,7 +357,6 @@ with pathlib.Path({str(lensfun_file)!r}).open("a", encoding="utf-8") as stream:
             tmp_path / "raw-job",
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
-            raw_profile=profile,
             raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
         )
 
@@ -366,7 +364,7 @@ with pathlib.Path({str(lensfun_file)!r}).open("a", encoding="utf-8") as stream:
 def test_prepare_rejects_a_developed_tiff_replaced_during_normalization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source, exiftool, rawtherapee, profile, _ = _raw_test_dependencies(tmp_path)
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
     replacement = tmp_path / "replacement.tif"
     Image.new("RGB", (180, 120), (8, 24, 48)).save(
         replacement,
@@ -386,13 +384,12 @@ def test_prepare_rejects_a_developed_tiff_replaced_during_normalization(
             tmp_path / "raw-job",
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
-            raw_profile=profile,
             raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
         )
 
 
 def test_inspect_rejects_a_raw_source_changed_during_metadata_read(tmp_path: Path) -> None:
-    source, _, _, _, _ = _raw_test_dependencies(tmp_path)
+    source, _, _, _ = _raw_test_dependencies(tmp_path)
     exiftool = _write_executable(
         tmp_path / "mutating-exiftool",
         """#!/usr/bin/env python3

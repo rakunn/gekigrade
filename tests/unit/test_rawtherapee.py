@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import plistlib
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -202,6 +203,49 @@ with pathlib.Path(sys.argv[0]).open("a", encoding="utf-8") as stream:
     target = work / "developed.tif"
 
     with pytest.raises(RawTherapeeError, match="executable changed"):
+        develop_raw(
+            source,
+            target,
+            work_directory=work,
+            profile=profile,
+            executable=executable,
+        )
+
+    assert not target.exists()
+
+
+def test_develop_raw_revalidates_the_version_immediately_before_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "photo.arw"
+    _write_uint16_tiff(source)
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        """#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+""",
+    )
+    plist = executable.parent.parent / "Info.plist"
+    original_copyfile = shutil.copyfile
+
+    def copy_profile_then_upgrade(source_path: Path, target_path: Path) -> None:
+        original_copyfile(source_path, target_path)
+        if target_path.name == "development.pp3":
+            plist.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "5.12"}))
+
+    monkeypatch.setattr(shutil, "copyfile", copy_profile_then_upgrade)
+    work = tmp_path / "rawtherapee"
+    target = work / "developed.tif"
+
+    with pytest.raises(RawTherapeeError, match=r"requires version 5\.13; found 5\.12"):
         develop_raw(
             source,
             target,

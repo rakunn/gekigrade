@@ -470,6 +470,11 @@ def develop_raw(
     environment["RT_CACHE"] = str(cache)
     before = _sha256(source)
     tool_version = _tool_version(executable)
+    if tool_version != SUPPORTED_RAWTHERAPEE_VERSION:
+        found = tool_version or "unknown"
+        raise RawTherapeeError(
+            f"GekiGrade requires version {SUPPORTED_RAWTHERAPEE_VERSION}; found {found}"
+        )
     executable_sha256 = _sha256(executable)
     started = time.monotonic()
     try:

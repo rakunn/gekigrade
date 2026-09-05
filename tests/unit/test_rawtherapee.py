@@ -110,7 +110,6 @@ print("processed deterministically")
         str(copied_profile),
         "-tz",
         "-b16",
-        "-Y",
         "-c",
         str(work / "source-snapshot.arw"),
     ]
@@ -223,6 +222,47 @@ shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1])
     target = work / "developed.tif"
 
     with pytest.raises(RawTherapeeError, match="run report"):
+        develop_raw(
+            source,
+            target,
+            work_directory=work,
+            profile=profile,
+            executable=executable,
+        )
+
+    assert source.read_bytes() == source_before
+    assert not target.exists()
+
+
+def test_develop_raw_does_not_authorize_overwriting_a_raced_output_symlink(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "photo.arw"
+    _write_uint16_tiff(source)
+    source_before = source.read_bytes()
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        f"""#!/usr/bin/env python3
+import pathlib
+import sys
+
+args = sys.argv[1:]
+target = pathlib.Path(args[args.index("-o") + 1])
+target.symlink_to(pathlib.Path({str(source)!r}))
+if "-Y" in args:
+    target.write_bytes(b"corrupted through output symlink")
+    raise SystemExit
+print("output already exists", file=sys.stderr)
+raise SystemExit(7)
+""",
+    )
+    work = tmp_path / "rawtherapee"
+    target = work / "developed.tif"
+
+    with pytest.raises(RawTherapeeError, match="output already exists"):
         develop_raw(
             source,
             target,

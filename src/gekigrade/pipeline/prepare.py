@@ -204,7 +204,7 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
     recorded_source_path = str(path.absolute())
     with tempfile.TemporaryDirectory(prefix="gekigrade-raw-metadata-") as directory:
         metadata_snapshot = Path(directory) / f"source-snapshot{path.suffix}"
-        _copy_raw_metadata_snapshot(path, metadata_snapshot, source_sha256)
+        _copy_identity_bound_snapshot(path, metadata_snapshot, source_sha256, label="source ARW")
         metadata, metadata_reader = _read_exiftool(
             metadata_snapshot, executable=exiftool_executable
         )
@@ -449,7 +449,13 @@ def _stable_regular_file_snapshot(path: Path) -> tuple[str, int] | None:
     return actual_sha256, opened_status.st_size
 
 
-def _copy_raw_metadata_snapshot(source: Path, target: Path, expected_sha256: str) -> None:
+def _copy_identity_bound_snapshot(
+    source: Path,
+    target: Path,
+    expected_sha256: str,
+    *,
+    label: str,
+) -> None:
     source_flags = os.O_RDONLY | os.O_NONBLOCK
     target_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
@@ -458,12 +464,12 @@ def _copy_raw_metadata_snapshot(source: Path, target: Path, expected_sha256: str
     try:
         source_descriptor = os.open(source, source_flags)
     except OSError as exc:
-        raise ValueError("source ARW could not be opened for metadata inspection") from exc
+        raise ValueError(f"{label} could not be opened for snapshotting") from exc
     try:
         target_descriptor = os.open(target, target_flags, 0o600)
     except OSError as exc:
         os.close(source_descriptor)
-        raise ValueError("RAW metadata snapshot could not be created safely") from exc
+        raise ValueError(f"{label} snapshot could not be created safely") from exc
     try:
         with (
             os.fdopen(source_descriptor, "rb") as source_stream,
@@ -472,9 +478,9 @@ def _copy_raw_metadata_snapshot(source: Path, target: Path, expected_sha256: str
             opened_status = os.fstat(source_stream.fileno())
             opened_identity = _file_identity(opened_status)
             if not stat.S_ISREG(opened_status.st_mode):
-                raise ValueError("source ARW is not a regular file")
+                raise ValueError(f"{label} is not a regular file")
             if opened_status.st_size > MAX_SOURCE_BYTES:
-                raise ValueError("ARW exceeds the 1 GiB safety limit")
+                raise ValueError(f"{label} exceeds the 1 GiB safety limit")
             digest = hashlib.sha256()
             for block in iter(lambda: source_stream.read(1024 * 1024), b""):
                 digest.update(block)
@@ -490,10 +496,10 @@ def _copy_raw_metadata_snapshot(source: Path, target: Path, expected_sha256: str
             or _file_identity(source_path_status) != opened_identity
             or digest.hexdigest() != expected_sha256
         ):
-            raise ValueError("source ARW changed while its metadata snapshot was created")
+            raise ValueError(f"{label} changed while its snapshot was created")
         snapshot = _stable_regular_file_snapshot(target)
         if snapshot is None or snapshot != (expected_sha256, opened_status.st_size):
-            raise ValueError("RAW metadata snapshot is not identity-stable")
+            raise ValueError(f"{label} snapshot is not identity-stable")
     except Exception:
         target.unlink(missing_ok=True)
         raise
@@ -716,6 +722,11 @@ def prepare_job(
             work_directory=raw_work,
             profile=DEFAULT_RAW_PROFILE,
             executable=rawtherapee_executable,
+            capture_metadata=source["capture_metadata"],
+            expected_camera_input_profile=raw_camera_input_profile,
+            expected_camera_resources=raw_camera_resources_status,
+            expected_lensfun_database=raw_lensfun_database_status,
+            expected_output_profile_sha256=expected_intermediate_profile_sha256,
         )
         developed_artifact = (developed, result.output_sha256)
         raw_run_report_artifact = (result.report_path, result.report_sha256)
@@ -752,9 +763,20 @@ def prepare_job(
         normalization_input_sha256 = sha256_file(developed)
         if normalization_input_sha256 != result.output_sha256:
             raise RawTherapeeError("developed TIFF changed before normalization")
-        normalization_tool = normalize_profiled_tiff(
-            developed, working, executable=imagemagick_executable
-        )
+        with tempfile.TemporaryDirectory(prefix="gekigrade-raw-normalization-") as directory:
+            normalization_snapshot = Path(directory) / "developed-snapshot.tif"
+            _copy_identity_bound_snapshot(
+                developed,
+                normalization_snapshot,
+                result.output_sha256,
+                label="developed TIFF",
+            )
+            normalization_tool = normalize_profiled_tiff(
+                normalization_snapshot, working, executable=imagemagick_executable
+            )
+            if not _artifact_matches(normalization_snapshot, result.output_sha256):
+                working.unlink(missing_ok=True)
+                raise RawTherapeeError("developed TIFF snapshot changed during normalization")
         if sha256_file(developed) != normalization_input_sha256:
             working.unlink(missing_ok=True)
             raise RawTherapeeError("developed TIFF changed during normalization")

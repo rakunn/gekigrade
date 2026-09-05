@@ -919,6 +919,132 @@ def test_prepare_removes_manifest_if_camera_revalidation_raises_after_publicatio
     assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
+def test_prepare_normalizes_an_identity_bound_developed_tiff_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    baseline = tmp_path / "baseline-job"
+    raced = tmp_path / "raced-job"
+    prepare_job(
+        source,
+        baseline,
+        exiftool_executable=exiftool,
+        rawtherapee_executable=rawtherapee,
+    )
+    expected_working_sha256 = _sha256(baseline / "intermediate/working.tif")
+    replacement = tmp_path / "replacement-developed.tif"
+    subprocess.run(
+        [
+            "/opt/homebrew/bin/magick",
+            str(baseline / "intermediate/rawtherapee/developed.tif"),
+            "-evaluate",
+            "multiply",
+            "0.5",
+            "-depth",
+            "16",
+            "-define",
+            "tiff:bits-per-sample=16",
+            f"TIFF:{replacement}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    def normalize_while_developed_path_is_replaced(
+        source_path: Path, target_path: Path, *, executable: Path
+    ) -> ProcessorIdentity:
+        developed = raced / "intermediate/rawtherapee/developed.tif"
+        backup = developed.with_suffix(".backup")
+        developed.rename(backup)
+        try:
+            shutil.copyfile(replacement, developed)
+            return real_normalize_profiled_tiff(source_path, target_path, executable=executable)
+        finally:
+            developed.unlink(missing_ok=True)
+            backup.rename(developed)
+
+    monkeypatch.setattr(
+        prepare_module,
+        "normalize_profiled_tiff",
+        normalize_while_developed_path_is_replaced,
+    )
+
+    prepare_job(
+        source,
+        raced,
+        exiftool_executable=exiftool,
+        rawtherapee_executable=rawtherapee,
+    )
+
+    assert _sha256(raced / "intermediate/working.tif") == expected_working_sha256
+
+
+def test_prepare_uses_an_identity_bound_rawtherapee_runtime_bundle(tmp_path: Path) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    baseline = tmp_path / "baseline-job"
+    raced = tmp_path / "raced-job"
+    prepare_job(
+        source,
+        baseline,
+        exiftool_executable=exiftool,
+        rawtherapee_executable=rawtherapee,
+    )
+    expected_working_sha256 = _sha256(baseline / "intermediate/working.tif")
+    replacement = tmp_path / "replacement-developed.tif"
+    subprocess.run(
+        [
+            "/opt/homebrew/bin/magick",
+            str(baseline / "intermediate/rawtherapee/developed.tif"),
+            "-evaluate",
+            "multiply",
+            "0.5",
+            "-depth",
+            "16",
+            "-define",
+            "tiff:bits-per-sample=16",
+            f"TIFF:{replacement}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    selected_profile = rawtherapee.parent.parent / "Resources/share/dcpprofiles/SONY ILCE-TEST.dcp"
+    _write_executable(
+        rawtherapee,
+        f"""#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+original_profile = pathlib.Path({str(selected_profile)!r})
+original_bytes = original_profile.read_bytes()
+original_profile.write_bytes(b"temporarily replaced profile")
+try:
+    runtime_profile = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "Resources/share/dcpprofiles/SONY ILCE-TEST.dcp"
+    )
+    source = pathlib.Path(args[-1])
+    if runtime_profile.read_bytes() == b"temporarily replaced profile":
+        source = pathlib.Path({str(replacement)!r})
+    shutil.copyfile(source, pathlib.Path(args[args.index("-o") + 1]))
+finally:
+    original_profile.write_bytes(original_bytes)
+""",
+    )
+
+    prepare_job(
+        source,
+        raced,
+        exiftool_executable=exiftool,
+        rawtherapee_executable=rawtherapee,
+    )
+
+    assert _sha256(raced / "intermediate/working.tif") == expected_working_sha256
+
+
 @pytest.mark.parametrize(
     ("profile_attribute", "system_profile"),
     [("ACESCG_PROFILE", ACESCG_PROFILE), ("SRGB_PROFILE", SRGB_PROFILE)],
@@ -1012,19 +1138,20 @@ def test_prepare_rejects_a_developed_tiff_replaced_during_normalization(
         format="TIFF",
         icc_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc").read_bytes(),
     )
+    job = tmp_path / "raw-job"
 
     def replace_then_normalize(
-        developed: Path, working: Path, *, executable: Path
+        snapshot: Path, working: Path, *, executable: Path
     ) -> ProcessorIdentity:
-        shutil.copyfile(replacement, developed)
-        return real_normalize_profiled_tiff(developed, working, executable=executable)
+        shutil.copyfile(replacement, job / "intermediate/rawtherapee/developed.tif")
+        return real_normalize_profiled_tiff(snapshot, working, executable=executable)
 
     monkeypatch.setattr(prepare_module, "normalize_profiled_tiff", replace_then_normalize)
 
     with pytest.raises(RawTherapeeError, match="developed TIFF changed"):
         prepare_job(
             source,
-            tmp_path / "raw-job",
+            job,
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
         )

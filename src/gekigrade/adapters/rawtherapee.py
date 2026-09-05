@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
@@ -206,6 +207,96 @@ def _write_run_report(report_path: Path, report: Mapping[str, object], target: P
     except OSError as exc:
         target.unlink(missing_ok=True)
         raise RawTherapeeError("RawTherapee run report could not be written safely") from exc
+
+
+def _snapshot_runtime_bundle(executable: Path) -> tuple[Path, Path, str]:
+    bundle = executable.parents[2]
+    if any(path.is_symlink() for path in bundle.rglob("*")):
+        raise RawTherapeeError("RawTherapee application bundle contains symlinks")
+    runtime_root = Path(
+        tempfile.mkdtemp(prefix="gekigrade-rawtherapee-runtime-", dir="/private/tmp")
+    )
+    relative_executable = executable.relative_to(bundle)
+    clone = runtime_root / bundle.name
+    try:
+        completed = subprocess.run(
+            ["/bin/cp", "-cR", str(bundle), str(clone)],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=120,
+            stdin=subprocess.DEVNULL,
+            env={"LC_ALL": "C", "PATH": "/bin:/usr/bin"},
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        shutil.rmtree(runtime_root, ignore_errors=True)
+        raise RawTherapeeError(
+            f"RawTherapee runtime bundle could not be snapshotted: {exc}"
+        ) from exc
+    strategy = "apfs-clone"
+    if completed.returncode != 0:
+        clone = runtime_root / f"copy-{bundle.name}"
+        try:
+            shutil.copytree(bundle, clone)
+        except (OSError, shutil.Error) as exc:
+            shutil.rmtree(runtime_root, ignore_errors=True)
+            detail = completed.stderr.strip() or str(exc)
+            raise RawTherapeeError(
+                f"RawTherapee runtime bundle could not be snapshotted: {detail}"
+            ) from exc
+        strategy = "full-copy"
+    runtime_executable = clone / relative_executable
+    if (
+        clone.is_symlink()
+        or any(path.is_symlink() for path in clone.rglob("*"))
+        or path_has_symlink(runtime_executable)
+        or not runtime_executable.is_file()
+        or runtime_executable.stat().st_mode & 0o111 == 0
+    ):
+        shutil.rmtree(runtime_root, ignore_errors=True)
+        raise RawTherapeeError("RawTherapee runtime snapshot has no safe executable")
+    return runtime_root, runtime_executable, strategy
+
+
+def _resource_fingerprint(executable: Path, metadata: dict[str, object]) -> dict[str, object]:
+    camera_resources = inspect_camera_resources(executable=executable)
+    if not camera_resources["ready"]:
+        raise RawTherapeeError("RawTherapee runtime camera resources are not ready")
+    camera_input = inspect_camera_input_profile(metadata, executable=executable)
+    lensfun = inspect_lensfun_database(database=lensfun_database_for_executable(executable))
+    if not lensfun["ready"]:
+        raise RawTherapeeError("RawTherapee runtime Lensfun database is not ready")
+    output_profile_sha256 = _stable_source_sha256(
+        rawtherapee_output_profile_for_executable(executable)
+    )
+    if output_profile_sha256 is None:
+        raise RawTherapeeError("RawTherapee runtime output profile is not stable")
+    return {
+        "camera_aliases_sha256": camera_resources["aliases_sha256"],
+        "camera_constants_sha256": camera_resources["camera_constants_sha256"],
+        "camera_profile_key": camera_input["profile_key"],
+        "camera_profile_kind": camera_input["resolved_kind"],
+        "camera_profile_sha256": camera_input["profile_sha256"],
+        "lensfun_database_sha256": lensfun["sha256"],
+        "output_profile_sha256": output_profile_sha256,
+    }
+
+
+def _expected_resource_fingerprint(
+    camera_input: CameraInputProfile,
+    camera_resources: CameraResourceStatus,
+    lensfun: ResourceStatus,
+    output_profile_sha256: str,
+) -> dict[str, object]:
+    return {
+        "camera_aliases_sha256": camera_resources["aliases_sha256"],
+        "camera_constants_sha256": camera_resources["camera_constants_sha256"],
+        "camera_profile_key": camera_input["profile_key"],
+        "camera_profile_kind": camera_input["resolved_kind"],
+        "camera_profile_sha256": camera_input["profile_sha256"],
+        "lensfun_database_sha256": lensfun["sha256"],
+        "output_profile_sha256": output_profile_sha256,
+    }
 
 
 def _validate_developed_tiff(target: Path) -> str:
@@ -683,6 +774,11 @@ def develop_raw(
     profile: Path,
     executable: Path = RAWTHERAPEE_CLI,
     timeout_seconds: float = 600.0,
+    capture_metadata: dict[str, object] | None = None,
+    expected_camera_input_profile: CameraInputProfile | None = None,
+    expected_camera_resources: CameraResourceStatus | None = None,
+    expected_lensfun_database: ResourceStatus | None = None,
+    expected_output_profile_sha256: str | None = None,
 ) -> RawDevelopmentResult:
     source, target, work_directory, profile, executable = _validate_inputs(
         source, target, work_directory, profile, executable
@@ -703,10 +799,33 @@ def develop_raw(
         label="source RAW snapshot",
         mode=0o400,
     )
+    selected_tool_version = _tool_version(executable)
+    selected_executable_sha256 = _sha256(executable)
+    try:
+        runtime_root, runtime_executable, runtime_snapshot_strategy = _snapshot_runtime_bundle(
+            executable
+        )
+    except Exception:
+        source_snapshot.unlink(missing_ok=True)
+        raise
+    expected_resource_inputs = (
+        expected_camera_input_profile,
+        expected_camera_resources,
+        expected_lensfun_database,
+        expected_output_profile_sha256,
+    )
+    if capture_metadata is None and any(item is not None for item in expected_resource_inputs):
+        source_snapshot.unlink(missing_ok=True)
+        shutil.rmtree(runtime_root, ignore_errors=True)
+        raise ValueError("capture metadata is required with expected runtime resources")
+    if capture_metadata is not None and any(item is None for item in expected_resource_inputs):
+        source_snapshot.unlink(missing_ok=True)
+        shutil.rmtree(runtime_root, ignore_errors=True)
+        raise ValueError("all expected RawTherapee runtime resources are required")
     target.parent.mkdir(parents=True, exist_ok=True)
 
     arguments = [
-        str(executable),
+        str(runtime_executable),
         "-o",
         str(target),
         "-q",
@@ -714,7 +833,6 @@ def develop_raw(
         str(copied_profile),
         "-tz",
         "-b16",
-        "-Y",
         "-c",
         str(source_snapshot),
     ]
@@ -731,13 +849,33 @@ def develop_raw(
     try:
         if _stable_source_sha256(source) != before:
             raise RawTherapeeError("source RAW changed while its execution snapshot was created")
-        tool_version = _tool_version(executable)
+        tool_version = _tool_version(runtime_executable)
         if tool_version != SUPPORTED_RAWTHERAPEE_VERSION:
             found = tool_version or "unknown"
             raise RawTherapeeError(
                 f"GekiGrade requires version {SUPPORTED_RAWTHERAPEE_VERSION}; found {found}"
             )
-        executable_sha256 = _sha256(executable)
+        executable_sha256 = _sha256(runtime_executable)
+        if selected_tool_version != tool_version or selected_executable_sha256 != executable_sha256:
+            raise RawTherapeeError("RawTherapee runtime executable does not match the selection")
+        expected_runtime_resources: dict[str, object] | None = None
+        runtime_resources_before: dict[str, object] | None = None
+        if capture_metadata is not None:
+            assert expected_camera_input_profile is not None
+            assert expected_camera_resources is not None
+            assert expected_lensfun_database is not None
+            assert expected_output_profile_sha256 is not None
+            expected_runtime_resources = _expected_resource_fingerprint(
+                expected_camera_input_profile,
+                expected_camera_resources,
+                expected_lensfun_database,
+                expected_output_profile_sha256,
+            )
+            runtime_resources_before = _resource_fingerprint(runtime_executable, capture_metadata)
+            if runtime_resources_before != expected_runtime_resources:
+                raise RawTherapeeError(
+                    "RawTherapee runtime resources do not match the accepted fingerprints"
+                )
         started = time.monotonic()
         try:
             completed = subprocess.run(
@@ -761,14 +899,28 @@ def develop_raw(
 
         after = _stable_source_sha256(source)
         source_snapshot_after = _stable_source_sha256(source_snapshot)
-        tool_version_after = _tool_version(executable)
+        tool_version_after = _tool_version(runtime_executable)
         try:
-            executable_sha256_after = _sha256(executable)
+            executable_sha256_after = _sha256(runtime_executable)
         except OSError:
             executable_sha256_after = None
+        selected_tool_version_after = _tool_version(executable)
+        try:
+            selected_executable_sha256_after = _sha256(executable)
+        except OSError:
+            selected_executable_sha256_after = None
         profile_sha256_after = _stable_source_sha256(copied_profile)
+        runtime_resources_after = (
+            _resource_fingerprint(runtime_executable, capture_metadata)
+            if capture_metadata is not None
+            else None
+        )
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
     finally:
         source_snapshot.unlink(missing_ok=True)
+        shutil.rmtree(runtime_root, ignore_errors=True)
     report_path = work_directory / "run.json"
     report = {
         "schema_version": "1.0.0",
@@ -776,8 +928,12 @@ def develop_raw(
         "tool_version": tool_version,
         "tool_version_after": tool_version_after,
         "executable": str(executable),
+        "runtime_executable": str(runtime_executable),
+        "runtime_snapshot_strategy": runtime_snapshot_strategy,
         "executable_sha256": executable_sha256,
         "executable_sha256_after": executable_sha256_after,
+        "selected_executable_sha256": selected_executable_sha256,
+        "selected_executable_sha256_after": selected_executable_sha256_after,
         "arguments": arguments[1:],
         "environment": environment,
         "duration_seconds": round(time.monotonic() - started, 6),
@@ -791,6 +947,8 @@ def develop_raw(
         "source_snapshot_sha256_after": source_snapshot_after,
         "profile_sha256": profile_sha256,
         "profile_sha256_after": profile_sha256_after,
+        "runtime_resources_before": runtime_resources_before,
+        "runtime_resources_after": runtime_resources_after,
     }
     _write_run_report(report_path, report, target)
 
@@ -805,6 +963,15 @@ def develop_raw(
     if tool_version_after != tool_version or executable_sha256_after != executable_sha256:
         target.unlink(missing_ok=True)
         raise RawTherapeeError("RawTherapee executable changed while it was running")
+    if (
+        selected_tool_version_after != selected_tool_version
+        or selected_executable_sha256_after != selected_executable_sha256
+    ):
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("selected RawTherapee executable changed while it was running")
+    if runtime_resources_after != runtime_resources_before:
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee runtime resources changed while it was running")
     if profile_sha256_after != profile_sha256:
         target.unlink(missing_ok=True)
         raise RawTherapeeError("RAW development profile changed while RawTherapee was running")

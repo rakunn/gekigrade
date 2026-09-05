@@ -16,6 +16,8 @@ Use oriented, profile-tagged 16-bit TIFF for Milestone 1. It provides inspectabl
 
 Use macOS `ACESCG Linear.icc` at the LittleCMS boundary and the pinned OCIO ACES 2.0 CG configuration internally. Record the system profile hash and treat a changed hash as a different rendering fingerprint. This is a local macOS decision, not a cross-platform guarantee.
 
+Normalization and preview encoding resolve and invoke one explicit ImageMagick executable. Each operation brackets execution with its path, version, and binary SHA-256 fingerprint; `source.json` and the prepared manifest retain those actual producer identities separately from the environment snapshot reported by `geki doctor`.
+
 ## ADR-005 — OpenImageIO and OpenColorIO Python wheels
 
 Use project-local native wheels rather than Homebrew formulae. The exact Apple Silicon Python 3.12 versions imported successfully during planning and avoid Homebrew's larger dependency graph.

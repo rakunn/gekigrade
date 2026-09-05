@@ -9,7 +9,12 @@ from typing import Any, cast
 import numpy as np
 from PIL import Image, ImageDraw
 
-from gekigrade.adapters.imagemagick import make_preview, normalize_jpeg, normalize_profiled_tiff
+from gekigrade.adapters.imagemagick import (
+    MAGICK,
+    make_preview,
+    normalize_jpeg,
+    normalize_profiled_tiff,
+)
 from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
     RAWTHERAPEE_CLI,
@@ -326,6 +331,7 @@ def _artifact_manifest(job: Path, source: dict[str, Any]) -> dict[str, Any]:
             "output": {"path": str(SRGB_PROFILE), "sha256": sha256_file(SRGB_PROFILE)},
         },
         "tools": doctor,
+        "executed_tools": source.get("processing_tools", {}),
         "artifacts": artifacts,
     }
 
@@ -337,6 +343,7 @@ def prepare_job(
     exiftool_executable: Path = EXIFTOOL,
     rawtherapee_executable: Path = RAWTHERAPEE_CLI,
     raw_output_profile: Path = RAWTHERAPEE_OUTPUT_PROFILE,
+    imagemagick_executable: Path = MAGICK,
 ) -> Path:
     signature = _source_signature(source_path)
     if signature[:3] == b"\xff\xd8\xff":
@@ -353,7 +360,12 @@ def prepare_job(
     working = job / "intermediate/working.tif"
     preview = job / "preview.jpg"
     if source_format == "JPEG":
-        normalize_jpeg(source_path.resolve(), working, has_profile=embedded_profile is not None)
+        normalization_tool = normalize_jpeg(
+            source_path.resolve(),
+            working,
+            has_profile=embedded_profile is not None,
+            executable=imagemagick_executable,
+        )
     else:
         raw_work = job / "intermediate/rawtherapee"
         developed = raw_work / "developed.tif"
@@ -398,7 +410,9 @@ def prepare_job(
         normalization_input_sha256 = sha256_file(developed)
         if normalization_input_sha256 != result.output_sha256:
             raise RawTherapeeError("developed TIFF changed before normalization")
-        normalize_profiled_tiff(developed, working)
+        normalization_tool = normalize_profiled_tiff(
+            developed, working, executable=imagemagick_executable
+        )
         if sha256_file(developed) != normalization_input_sha256:
             working.unlink(missing_ok=True)
             raise RawTherapeeError("developed TIFF changed during normalization")
@@ -429,7 +443,11 @@ def prepare_job(
             },
             "lens_correction": lens_correction,
         }
-    make_preview(working, preview)
+    preview_tool = make_preview(working, preview, executable=imagemagick_executable)
+    source["processing_tools"] = {
+        "normalization": normalization_tool,
+        "preview": preview_tool,
+    }
     pixels = _load_srgb(preview)
     analysis = analyze_srgb(pixels)
     analysis["dimensions"] = {"width": pixels.shape[1], "height": pixels.shape[0]}

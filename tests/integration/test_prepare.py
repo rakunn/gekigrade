@@ -15,6 +15,7 @@ import pytest
 from PIL import Image
 
 import gekigrade.pipeline.prepare as prepare_module
+from gekigrade.adapters.imagemagick import ProcessorIdentity
 from gekigrade.adapters.imagemagick import make_preview as real_make_preview
 from gekigrade.adapters.imagemagick import normalize_profiled_tiff as real_normalize_profiled_tiff
 from gekigrade.adapters.rawtherapee import DEFAULT_RAW_PROFILE, RawTherapeeError
@@ -256,6 +257,7 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
         exiftool_executable=exiftool,
         rawtherapee_executable=rawtherapee,
         raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
+        imagemagick_executable=Path("/opt/homebrew/bin/magick"),
     )
 
     assert _sha256(source) == before
@@ -271,6 +273,13 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
         "version": "13.55",
         "executable_sha256": _sha256(exiftool),
     }
+    normalization_tool = metadata["processing_tools"]["normalization"]
+    assert normalization_tool["name"] == "ImageMagick"
+    assert normalization_tool["path"] == str(Path("/opt/homebrew/bin/magick").resolve())
+    assert normalization_tool["version"].startswith("Version: ImageMagick 7.1.1-47")
+    assert normalization_tool["executable_sha256"] == _sha256(
+        Path("/opt/homebrew/bin/magick").resolve()
+    )
     development = metadata["raw_development"]
     assert development["engine"] == "RawTherapee"
     assert development["profile_sha256"] == _sha256(DEFAULT_RAW_PROFILE)
@@ -303,6 +312,7 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     manifest = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifacts"]["intermediate/rawtherapee/run.json"]["sha256"]
     assert manifest["artifacts"]["intermediate/rawtherapee/development.pp3"]["sha256"]
+    assert manifest["executed_tools"] == metadata["processing_tools"]
 
 
 def test_prepare_does_not_expose_a_raw_profile_override() -> None:
@@ -337,10 +347,13 @@ def test_prepare_rechecks_the_raw_source_before_success(
 ) -> None:
     source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
 
-    def make_preview_then_change_source(working: Path, preview: Path) -> None:
-        real_make_preview(working, preview)
+    def make_preview_then_change_source(
+        working: Path, preview: Path, *, executable: Path
+    ) -> ProcessorIdentity:
+        identity = real_make_preview(working, preview, executable=executable)
         with source.open("ab") as stream:
             stream.write(b"changed-after-development")
+        return identity
 
     monkeypatch.setattr(prepare_module, "make_preview", make_preview_then_change_source)
 
@@ -420,9 +433,11 @@ def test_prepare_rejects_a_developed_tiff_replaced_during_normalization(
         icc_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc").read_bytes(),
     )
 
-    def replace_then_normalize(developed: Path, working: Path) -> None:
+    def replace_then_normalize(
+        developed: Path, working: Path, *, executable: Path
+    ) -> ProcessorIdentity:
         shutil.copyfile(replacement, developed)
-        real_normalize_profiled_tiff(developed, working)
+        return real_normalize_profiled_tiff(developed, working, executable=executable)
 
     monkeypatch.setattr(prepare_module, "normalize_profiled_tiff", replace_then_normalize)
 

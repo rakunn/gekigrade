@@ -13,6 +13,7 @@
 - RAW output must be exactly three-channel RGB with 16-bit samples, profile-tagged, correctly oriented, and admitted to ACEScg only after the intermediate profile is verified.
 - The developed TIFF hash must match the recorded RawTherapee output before profile inspection and immediately before and after normalization.
 - RAW metadata inspection hashes the source before ExifTool and rejects any change detected immediately afterward. It records the exact resolved ExifTool path, version, and executable hash and rejects a binary change during extraction.
+- JPEG and RAW normalization plus preview encoding record the exact resolved ImageMagick path, version, and executable hash for each operation; a binary change during an operation is rejected.
 - RawTherapee camera-input provenance records the selected DCP or ICC profile, or the camera-matrix fallback, together with camera-alias and camera-constants hashes; the resource fingerprint must remain unchanged during development.
 - RawTherapee executable version and file hash are captured before launch and must remain unchanged after exit.
 - RAW preparation rejects a caller-supplied PP3, and the version captured at the launch boundary must equal the supported 5.13 release.

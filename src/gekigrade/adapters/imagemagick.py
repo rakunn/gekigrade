@@ -12,6 +12,15 @@ from gekigrade.doctor import ACESCG_PROFILE, IMAGEMAGICK_CLI, SRGB_PROFILE
 
 MAGICK = IMAGEMAGICK_CLI
 PREVIEW_MAX_EDGE = 2048
+MAGICK_ENVIRONMENT = {
+    "LANG": "C",
+    "LC_ALL": "C",
+    "MAGICK_THREAD_LIMIT": "1",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OMP_SCHEDULE": "static",
+    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+}
 
 
 class ProcessorError(RuntimeError):
@@ -23,6 +32,7 @@ class ProcessorIdentity(TypedDict):
     path: str
     version: str
     executable_sha256: str
+    environment: dict[str, str]
 
 
 def preview_dimensions(
@@ -109,6 +119,7 @@ def _magick_identity(executable: Path) -> ProcessorIdentity:
             text=True,
             timeout=15,
             stdin=subprocess.DEVNULL,
+            env=MAGICK_ENVIRONMENT,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ProcessorError(f"ImageMagick version could not be inspected: {exc}") from exc
@@ -123,6 +134,7 @@ def _magick_identity(executable: Path) -> ProcessorIdentity:
         "path": str(resolved),
         "version": output[0].strip(),
         "executable_sha256": executable_sha256,
+        "environment": dict(MAGICK_ENVIRONMENT),
     }
 
 
@@ -138,6 +150,7 @@ def run_magick(
             text=True,
             timeout=timeout_seconds,
             stdin=subprocess.DEVNULL,
+            env=MAGICK_ENVIRONMENT,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ProcessorError(f"ImageMagick could not complete: {exc}") from exc

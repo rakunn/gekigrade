@@ -279,7 +279,7 @@ def _file_identity(status: os.stat_result) -> tuple[int, int, int, int, int]:
     return (status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
 
 
-def _validate_working_tiff(path: Path) -> tuple[dict[str, int], str]:
+def _validate_working_tiff(path: Path) -> tuple[dict[str, int], str, str]:
     if path.is_symlink() or not path.is_file():
         raise RuntimeError("working TIFF must be a regular, non-symlink file")
     try:
@@ -310,17 +310,16 @@ def _validate_working_tiff(path: Path) -> tuple[dict[str, int], str]:
     if not rgb_channels or samples_per_pixel != 3:
         path.unlink(missing_ok=True)
         raise RuntimeError("working TIFF must contain exactly three RGB channels")
-    if not isinstance(profile, bytes) or hashlib.sha256(profile).hexdigest() != sha256_file(
-        ACESCG_PROFILE
-    ):
+    profile_sha256 = hashlib.sha256(profile).hexdigest() if isinstance(profile, bytes) else None
+    if profile_sha256 is None or profile_sha256 != sha256_file(ACESCG_PROFILE):
         path.unlink(missing_ok=True)
         raise RuntimeError("working TIFF must embed the expected ACEScg profile")
-    return dimensions, working_sha256
+    return dimensions, working_sha256, profile_sha256
 
 
 def _load_validated_srgb(
     path: Path, *, expected_dimensions: tuple[int, int]
-) -> tuple[np.ndarray[Any, np.dtype[np.float32]], str]:
+) -> tuple[np.ndarray[Any, np.dtype[np.float32]], str, str]:
     if path.is_symlink() or not path.is_file():
         raise RuntimeError("preview must be a regular, non-symlink JPEG")
     before = sha256_file(path)
@@ -343,15 +342,14 @@ def _load_validated_srgb(
     except (OSError, SyntaxError, UnidentifiedImageError) as exc:
         path.unlink(missing_ok=True)
         raise RuntimeError(f"preview JPEG cannot be decoded safely: {exc}") from exc
-    if not isinstance(profile, bytes) or hashlib.sha256(profile).hexdigest() != sha256_file(
-        SRGB_PROFILE
-    ):
+    profile_sha256 = hashlib.sha256(profile).hexdigest() if isinstance(profile, bytes) else None
+    if profile_sha256 is None or profile_sha256 != sha256_file(SRGB_PROFILE):
         path.unlink(missing_ok=True)
         raise RuntimeError("preview JPEG must embed the expected sRGB profile")
     if path.is_symlink() or not path.is_file() or sha256_file(path) != before:
         path.unlink(missing_ok=True)
         raise RuntimeError("preview JPEG changed during validation and pixel loading")
-    return pixels, before
+    return pixels, before, profile_sha256
 
 
 def _artifact_matches(path: Path, expected_sha256: str) -> bool:
@@ -425,8 +423,24 @@ def _example_plan(source_sha256: str) -> dict[str, Any]:
     return {"schema_version": "1.0.0", "source_sha256": source_sha256, "candidates": candidates}
 
 
-def _artifact_manifest(job: Path, source: dict[str, Any]) -> dict[str, Any]:
+def _artifact_manifest(
+    job: Path,
+    source: dict[str, Any],
+    *,
+    working_profile_sha256: str,
+    output_profile_sha256: str,
+) -> dict[str, Any]:
     doctor = build_doctor_report(run_color_probe=False)
+    doctor["profiles"]["acescg"] = {
+        "available": True,
+        "path": str(ACESCG_PROFILE),
+        "sha256": working_profile_sha256,
+    }
+    doctor["profiles"]["srgb"] = {
+        "available": True,
+        "path": str(SRGB_PROFILE),
+        "sha256": output_profile_sha256,
+    }
     artifacts: dict[str, dict[str, Any]] = {}
     for path in sorted(job.rglob("*")):
         if path.is_file() and path.name != "manifest.json":
@@ -438,8 +452,8 @@ def _artifact_manifest(job: Path, source: dict[str, Any]) -> dict[str, Any]:
         "source_sha256": source["source_sha256"],
         "source_path": source["source_path"],
         "profiles": {
-            "working": {"path": str(ACESCG_PROFILE), "sha256": sha256_file(ACESCG_PROFILE)},
-            "output": {"path": str(SRGB_PROFILE), "sha256": sha256_file(SRGB_PROFILE)},
+            "working": {"path": str(ACESCG_PROFILE), "sha256": working_profile_sha256},
+            "output": {"path": str(SRGB_PROFILE), "sha256": output_profile_sha256},
         },
         "tools": doctor,
         "executed_tools": source.get("processing_tools", {}),
@@ -545,7 +559,6 @@ def prepare_job(
             "intermediate_profile": intermediate_profile,
             "expected_intermediate_profile_path": str(raw_output_profile),
             "expected_intermediate_profile_sha256": expected_intermediate_profile_sha256,
-            "working_profile_sha256": sha256_file(ACESCG_PROFILE),
             "requested_capabilities": {
                 "demosaic": "AMaZE",
                 "white_balance": "camera",
@@ -558,7 +571,7 @@ def prepare_job(
             },
             "lens_correction": lens_correction,
         }
-    working_dimensions, working_sha256 = _validate_working_tiff(working)
+    working_dimensions, working_sha256, working_profile_sha256 = _validate_working_tiff(working)
     if source_format == "JPEG" and working_dimensions != source["oriented_dimensions"]:
         working.unlink(missing_ok=True)
         raise RuntimeError("JPEG working TIFF dimensions do not match the oriented source")
@@ -569,6 +582,7 @@ def prepare_job(
                 "RAW working TIFF orientation does not match the inspected EXIF orientation"
             )
         source["oriented_dimensions"] = working_dimensions
+        source["raw_development"]["working_profile_sha256"] = working_profile_sha256
     if not _artifact_matches(working, working_sha256):
         raise RuntimeError("working TIFF changed before preview generation")
     preview_tool = make_preview(working, preview, executable=imagemagick_executable)
@@ -582,7 +596,7 @@ def prepare_job(
     expected_preview_dimensions = preview_dimensions(
         working_dimensions["width"], working_dimensions["height"]
     )
-    pixels, preview_sha256 = _load_validated_srgb(
+    pixels, preview_sha256, output_profile_sha256 = _load_validated_srgb(
         preview, expected_dimensions=expected_preview_dimensions
     )
     source["prepared_artifacts"] = {
@@ -610,8 +624,20 @@ def prepare_job(
         )
     if source_format == "ARW" and sha256_file(source_path) != source["source_sha256"]:
         raise RawTherapeeError("source RAW changed during job preparation")
+    if not _artifact_matches(ACESCG_PROFILE, working_profile_sha256) or not _artifact_matches(
+        SRGB_PROFILE, output_profile_sha256
+    ):
+        raise RuntimeError("validated color profile changed before manifest publication")
     manifest_path = job / "manifest.json"
-    write_json(manifest_path, _artifact_manifest(job, source))
+    write_json(
+        manifest_path,
+        _artifact_manifest(
+            job,
+            source,
+            working_profile_sha256=working_profile_sha256,
+            output_profile_sha256=output_profile_sha256,
+        ),
+    )
     if not _artifact_matches(working, working_sha256) or not _artifact_matches(
         preview, preview_sha256
     ):
@@ -619,6 +645,11 @@ def prepare_job(
         raise RuntimeError(
             "prepared working or preview artifact changed during manifest publication"
         )
+    if not _artifact_matches(ACESCG_PROFILE, working_profile_sha256) or not _artifact_matches(
+        SRGB_PROFILE, output_profile_sha256
+    ):
+        manifest_path.unlink(missing_ok=True)
+        raise RuntimeError("validated color profile changed while publishing the job manifest")
     if source_format == "ARW" and sha256_file(source_path) != source["source_sha256"]:
         manifest_path.unlink(missing_ok=True)
         raise RawTherapeeError("source RAW changed while publishing the job manifest")

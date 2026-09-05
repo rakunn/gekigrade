@@ -15,7 +15,7 @@ import pytest
 from PIL import Image
 
 import gekigrade.pipeline.prepare as prepare_module
-from gekigrade.adapters.imagemagick import ProcessorIdentity
+from gekigrade.adapters.imagemagick import MAGICK_ENVIRONMENT, ProcessorIdentity
 from gekigrade.adapters.imagemagick import make_preview as real_make_preview
 from gekigrade.adapters.imagemagick import normalize_profiled_tiff as real_normalize_profiled_tiff
 from gekigrade.adapters.rawtherapee import DEFAULT_RAW_PROFILE, RawTherapeeError
@@ -201,7 +201,15 @@ def test_prepare_builds_a_complete_oriented_profiled_job_without_touching_source
     manifest = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["source_sha256"] == before
     assert manifest["artifacts"]["preview.jpg"]["sha256"]
-    assert manifest["profiles"]["working"]["sha256"]
+    assert manifest["profiles"]["working"]["sha256"] == _sha256(ACESCG_PROFILE)
+    assert manifest["profiles"]["output"]["sha256"] == _sha256(SRGB_PROFILE)
+    assert (
+        manifest["tools"]["profiles"]["acescg"]["sha256"]
+        == manifest["profiles"]["working"]["sha256"]
+    )
+    assert (
+        manifest["tools"]["profiles"]["srgb"]["sha256"] == manifest["profiles"]["output"]["sha256"]
+    )
 
 
 def test_prepare_rejects_non_jpeg_before_creating_job(tmp_path: Path) -> None:
@@ -291,6 +299,7 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     assert normalization_tool["executable_sha256"] == _sha256(
         Path("/opt/homebrew/bin/magick").resolve()
     )
+    assert normalization_tool["environment"] == MAGICK_ENVIRONMENT
     assert metadata["prepared_artifacts"] == {
         "working_tiff_sha256": _sha256(job / "intermediate/working.tif"),
         "preview_jpeg_sha256": _sha256(job / "preview.jpg"),
@@ -435,9 +444,9 @@ def test_prepare_removes_a_manifest_if_the_raw_changes_while_it_is_published(
     original_manifest = prepare_module._artifact_manifest
 
     def build_manifest_then_change_source(
-        job: Path, metadata: dict[str, object]
+        job: Path, metadata: dict[str, object], **profile_hashes: str
     ) -> dict[str, object]:
-        manifest = original_manifest(job, metadata)
+        manifest = original_manifest(job, metadata, **profile_hashes)
         with source.open("ab") as stream:
             stream.write(b"changed-while-publishing-manifest")
         return manifest
@@ -452,6 +461,37 @@ def test_prepare_removes_a_manifest_if_the_raw_changes_while_it_is_published(
             rawtherapee_executable=rawtherapee,
         )
     assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("profile_attribute", "system_profile"),
+    [("ACESCG_PROFILE", ACESCG_PROFILE), ("SRGB_PROFILE", SRGB_PROFILE)],
+)
+def test_prepare_removes_manifest_if_validated_profile_changes_while_published(
+    tagged_oriented_jpeg: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    profile_attribute: str,
+    system_profile: Path,
+) -> None:
+    profile = tmp_path / f"{profile_attribute}.icc"
+    profile.write_bytes(system_profile.read_bytes())
+    monkeypatch.setattr(prepare_module, profile_attribute, profile)
+    monkeypatch.setattr(f"gekigrade.adapters.imagemagick.{profile_attribute}", profile)
+    original_manifest = prepare_module._artifact_manifest
+
+    def build_manifest_then_change_profile(
+        job: Path, metadata: dict[str, object], **profile_hashes: str
+    ) -> dict[str, object]:
+        manifest = original_manifest(job, metadata, **profile_hashes)
+        profile.write_bytes(b"changed-while-publishing-manifest")
+        return manifest
+
+    monkeypatch.setattr(prepare_module, "_artifact_manifest", build_manifest_then_change_profile)
+
+    with pytest.raises(RuntimeError, match="color profile changed while publishing"):
+        prepare_job(tagged_oriented_jpeg, tmp_path / "jpeg-job")
+    assert not (tmp_path / "jpeg-job/manifest.json").exists()
 
 
 def test_prepare_rejects_a_lensfun_database_changed_during_development(tmp_path: Path) -> None:
@@ -553,6 +593,7 @@ def test_prepare_rejects_an_invalid_normalized_raw_working_tiff(
             "path": "/test/magick",
             "version": "test",
             "executable_sha256": "a" * 64,
+            "environment": MAGICK_ENVIRONMENT,
         }
 
     monkeypatch.setattr(prepare_module, "normalize_profiled_tiff", write_eight_bit_working)
@@ -598,9 +639,9 @@ def test_prepare_rejects_jpeg_working_dimensions_that_differ_from_source(
 ) -> None:
     real_validate = prepare_module._validate_working_tiff
 
-    def report_wrong_dimensions(working: Path) -> tuple[dict[str, int], str]:
-        _, working_sha256 = real_validate(working)
-        return {"width": 200, "height": 200}, working_sha256
+    def report_wrong_dimensions(working: Path) -> tuple[dict[str, int], str, str]:
+        _, working_sha256, profile_sha256 = real_validate(working)
+        return {"width": 200, "height": 200}, working_sha256, profile_sha256
 
     monkeypatch.setattr(prepare_module, "_validate_working_tiff", report_wrong_dimensions)
 
@@ -616,7 +657,7 @@ def test_prepare_binds_the_working_hash_to_the_validated_tiff(
     source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
     real_validate = prepare_module._validate_working_tiff
 
-    def validate_then_replace(working: Path) -> tuple[dict[str, int], str]:
+    def validate_then_replace(working: Path) -> tuple[dict[str, int], str, str]:
         result = real_validate(working)
         Image.new("RGB", (180, 120), (32, 64, 96)).save(
             working,
@@ -655,6 +696,7 @@ def test_prepare_rejects_a_preview_with_unexpected_dimensions(
             "path": "/test/magick",
             "version": "test",
             "executable_sha256": "a" * 64,
+            "environment": MAGICK_ENVIRONMENT,
         }
 
     monkeypatch.setattr(prepare_module, "make_preview", write_wrong_sized_preview)
@@ -680,6 +722,7 @@ def test_prepare_rejects_a_preview_without_the_expected_srgb_profile(
             "path": "/test/magick",
             "version": "test",
             "executable_sha256": "a" * 64,
+            "environment": MAGICK_ENVIRONMENT,
         }
 
     monkeypatch.setattr(prepare_module, "make_preview", write_untagged_preview)

@@ -16,6 +16,7 @@
 - RAW metadata inspection hashes the source before ExifTool and rejects any change detected immediately afterward. It records the exact resolved ExifTool path, version, and executable hash and rejects a binary change during extraction.
 - JPEG and RAW normalization plus preview encoding record the exact resolved ImageMagick path, version, and executable hash for each operation; a binary change during an operation is rejected.
 - ImageMagick receives private ICC snapshots whose hashes remain stable across the command. A changed snapshot or source system profile rejects and removes the produced artifact.
+- ImageMagick receives only the recorded allowlisted environment with fixed locale, system path, and single-thread ImageMagick/OpenMP settings; caller configuration and module paths do not cross the subprocess boundary.
 - RawTherapee camera-input provenance records the selected DCP or ICC profile, or the camera-matrix fallback, together with camera-alias and camera-constants hashes; the resource fingerprint must remain unchanged during development.
 - RawTherapee executable version and file hash are captured before launch and must remain unchanged after exit.
 - RAW preparation rejects a caller-supplied PP3, and the version captured at the launch boundary must equal the supported 5.13 release.
@@ -31,6 +32,7 @@
 - Every normalized working image must decode as a three-channel, 16-bit RGB TIFF with the expected embedded ACEScg profile before preview or analysis begins. Its accepted SHA-256 is calculated from the same stable open file descriptor used for structural validation.
 - The validated working TIFF hash remains unchanged across preview generation and through manifest publication. The preview must decode as three-channel JPEG, embed the expected sRGB profile, and remain hash-stable through pixel loading and manifest publication.
 - A final RAW source check precedes the prepared manifest; a source change during manifest publication removes the manifest and fails the job.
+- The ACEScg and sRGB hashes validated from produced artifacts remain identical in all manifest profile entries; either system profile changing before or during publication blocks or removes the manifest.
 - Cross-platform decoded 8-bit output allows maximum channel difference 1 and RMSE 0.25; file-byte equality is not promised across encoders.
 - Manifest records source, schema, plan, recipe, tool, profile, intermediate, candidate, selection, master, and derivative provenance.
 

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from gekigrade.adapters.imagemagick import (
+    MAGICK_ENVIRONMENT,
     ProcessorError,
     ProcessorIdentity,
     normalize_profiled_tiff,
@@ -54,7 +55,43 @@ exit 0
         "path": str(executable.resolve()),
         "version": "ImageMagick 7.1.1-test",
         "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        "environment": MAGICK_ENVIRONMENT,
     }
+
+
+def test_run_magick_uses_and_records_a_pinned_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = _write_executable(
+        tmp_path / "magick",
+        """#!/bin/sh
+if [ "$1" = "-version" ]; then
+  echo "ImageMagick 7.1.1-test"
+  exit 0
+fi
+/usr/bin/env > "$1"
+""",
+    )
+    report = tmp_path / "environment.txt"
+    monkeypatch.setenv("MAGICK_CONFIGURE_PATH", "/caller/config")
+    monkeypatch.setenv("MAGICK_CODER_MODULE_PATH", "/caller/coders")
+    monkeypatch.setenv("MAGICK_FILTER_MODULE_PATH", "/caller/filters")
+    monkeypatch.setenv("MAGICK_THREAD_LIMIT", "99")
+    monkeypatch.setenv("UNRELATED_CALLER_VALUE", "must-not-cross")
+
+    identity = run_magick([str(report)], executable=executable)
+
+    observed = dict(
+        line.split("=", 1)
+        for line in report.read_text(encoding="utf-8").splitlines()
+        if "=" in line
+    )
+    assert identity["environment"] == MAGICK_ENVIRONMENT
+    assert all(observed.get(key) == value for key, value in MAGICK_ENVIRONMENT.items())
+    assert "MAGICK_CONFIGURE_PATH" not in observed
+    assert "MAGICK_CODER_MODULE_PATH" not in observed
+    assert "MAGICK_FILTER_MODULE_PATH" not in observed
+    assert "UNRELATED_CALLER_VALUE" not in observed
 
 
 def test_run_magick_rejects_an_executable_changed_during_processing(tmp_path: Path) -> None:
@@ -103,6 +140,7 @@ def test_normalize_profiled_tiff_uses_one_stable_private_acescg_snapshot(
             "path": "/test/magick",
             "version": "test",
             "executable_sha256": "a" * 64,
+            "environment": MAGICK_ENVIRONMENT,
         }
 
     monkeypatch.setattr("gekigrade.adapters.imagemagick.run_magick", inspect_invocation)
@@ -133,6 +171,7 @@ def test_normalize_profiled_tiff_rejects_a_changed_profile_snapshot(
             "path": "/test/magick",
             "version": "test",
             "executable_sha256": "a" * 64,
+            "environment": MAGICK_ENVIRONMENT,
         }
 
     monkeypatch.setattr("gekigrade.adapters.imagemagick.run_magick", change_snapshot)

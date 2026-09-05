@@ -5,6 +5,8 @@ import json
 import plistlib
 from pathlib import Path
 
+import numpy as np
+import OpenImageIO as oiio
 import pytest
 from PIL import Image
 
@@ -34,9 +36,16 @@ def _write_rawtherapee_app(root: Path, version: str, source: str) -> Path:
     return executable
 
 
+def _write_uint16_tiff(path: Path, *, channels: int = 3) -> None:
+    buffer = oiio.ImageBuf(oiio.ImageSpec(2, 2, channels, oiio.UINT16))
+    pixels = np.full((2, 2, channels), 32768, dtype=np.uint16)
+    assert buffer.set_pixels(oiio.ROI(0, 2, 0, 2, 0, 1, 0, channels), pixels)
+    assert buffer.write(str(path), fileformat="tiff"), buffer.geterror()
+
+
 def test_develop_raw_isolates_state_and_records_the_fixed_invocation(tmp_path: Path) -> None:
     source = tmp_path / "photo.arw"
-    Image.new("I;16", (2, 2), 12345).save(source, format="TIFF")
+    _write_uint16_tiff(source)
     before = _sha256(source)
     profile = tmp_path / "neutral.pp3"
     profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
@@ -103,7 +112,7 @@ print("processed deterministically")
 
 def test_develop_raw_surfaces_failure_and_does_not_admit_partial_output(tmp_path: Path) -> None:
     source = tmp_path / "photo.arw"
-    Image.new("I;16", (2, 2), 12345).save(source, format="TIFF")
+    _write_uint16_tiff(source)
     profile = tmp_path / "neutral.pp3"
     profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
     executable = _write_rawtherapee_app(
@@ -139,7 +148,7 @@ raise SystemExit(7)
 
 def test_develop_raw_rejects_an_unpinned_rawtherapee_version(tmp_path: Path) -> None:
     source = tmp_path / "photo.arw"
-    Image.new("I;16", (2, 2), 12345).save(source, format="TIFF")
+    _write_uint16_tiff(source)
     profile = tmp_path / "neutral.pp3"
     profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
     executable = _write_rawtherapee_app(
@@ -169,7 +178,7 @@ shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1])
 
 def test_develop_raw_rejects_an_eight_bit_tiff_output(tmp_path: Path) -> None:
     source = tmp_path / "photo.arw"
-    Image.new("L", (2, 2), 123).save(source, format="TIFF")
+    Image.new("RGB", (2, 2), (123, 123, 123)).save(source, format="TIFF")
     profile = tmp_path / "neutral.pp3"
     profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
     executable = _write_rawtherapee_app(
@@ -188,6 +197,38 @@ shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1])
     target = work / "developed.tif"
 
     with pytest.raises(RawTherapeeError, match="16-bit samples"):
+        develop_raw(
+            source,
+            target,
+            work_directory=work,
+            profile=profile,
+            executable=executable,
+        )
+
+    assert not target.exists()
+
+
+def test_develop_raw_rejects_a_sixteen_bit_grayscale_tiff_output(tmp_path: Path) -> None:
+    source = tmp_path / "photo.arw"
+    _write_uint16_tiff(source, channels=1)
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        """#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+""",
+    )
+    work = tmp_path / "rawtherapee"
+    target = work / "developed.tif"
+
+    with pytest.raises(RawTherapeeError, match="three RGB channels"):
         develop_raw(
             source,
             target,

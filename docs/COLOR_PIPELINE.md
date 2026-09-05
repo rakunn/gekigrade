@@ -12,7 +12,7 @@ A Sony ARW is accepted only when its TIFF-based signature and ExifTool type/MIME
 
 ## Working representation
 
-The working representation is 16-bit integer RGB TIFF tagged with the macOS `ACESCG Linear.icc` profile. JPEG reaches it through LittleCMS directly. RAW first produces a 16-bit TIFF whose embedded ICC hash must equal the installed RawTherapee `RTv4_Large` profile; a mismatch blocks the job. LittleCMS then transforms that profile into ACEScg and strips non-deterministic development metadata before reattaching the ACEScg profile. The manifest records profile paths and SHA-256 values. OpenImageIO reads pixels as normalized float32 for recipe processing.
+The working representation is 16-bit integer RGB TIFF tagged with the macOS `ACESCG Linear.icc` profile. JPEG reaches it through LittleCMS directly. RAW first produces a TIFF that must contain exactly three RGB channels with 16-bit samples and whose embedded ICC hash must equal the installed RawTherapee `RTv4_Large` profile; any mismatch blocks the job. LittleCMS then transforms that profile into ACEScg and strips non-deterministic development metadata before reattaching the ACEScg profile. The manifest records profile paths and SHA-256 values. OpenImageIO reads pixels as normalized float32 for recipe processing.
 
 ## Operation ordering and spaces
 

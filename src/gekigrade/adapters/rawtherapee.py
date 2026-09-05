@@ -261,6 +261,8 @@ def develop_raw(
             if not isinstance(image, TiffImagePlugin.TiffImageFile):
                 raise OSError("decoded image is not a TIFF")
             bits_per_sample = image.tag_v2.get(258)
+            samples_per_pixel = image.tag_v2.get(277)
+            rgb_channels = image.mode == "RGB" and image.getbands() == ("R", "G", "B")
     except (OSError, SyntaxError, UnidentifiedImageError) as exc:
         target.unlink(missing_ok=True)
         raise RawTherapeeError(f"RawTherapee output TIFF cannot be decoded: {exc}") from exc
@@ -268,6 +270,9 @@ def develop_raw(
     if not bits or any(bit != 16 for bit in bits):
         target.unlink(missing_ok=True)
         raise RawTherapeeError("RawTherapee output TIFF must contain 16-bit samples")
+    if not rgb_channels or samples_per_pixel != 3:
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee output TIFF must contain exactly three RGB channels")
 
     output_sha256 = _sha256(target)
     report["output_sha256"] = output_sha256

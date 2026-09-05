@@ -6,6 +6,8 @@ import plistlib
 import subprocess
 from pathlib import Path
 
+import numpy as np
+import OpenImageIO as oiio
 import pytest
 from PIL import Image
 
@@ -39,11 +41,29 @@ def _write_rawtherapee_app(root: Path, source: str) -> Path:
 def _raw_test_dependencies(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     source = tmp_path / "camera.ARW"
     srgb_profile = Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc")
-    Image.new("I;16", (180, 120), 32768).save(
-        source,
-        format="TIFF",
-        compression="tiff_deflate",
-        icc_profile=srgb_profile.read_bytes(),
+    unprofiled_source = tmp_path / "camera-unprofiled.tif"
+    buffer = oiio.ImageBuf(oiio.ImageSpec(180, 120, 3, oiio.UINT16))
+    pixels = np.empty((120, 180, 3), dtype=np.uint16)
+    pixels[:, :, 0] = 24000
+    pixels[:, :, 1] = 32000
+    pixels[:, :, 2] = 40000
+    assert buffer.set_pixels(oiio.ROI(0, 180, 0, 120, 0, 1, 0, 3), pixels)
+    assert buffer.write(str(unprofiled_source)), buffer.geterror()
+    subprocess.run(
+        [
+            "/opt/homebrew/bin/magick",
+            str(unprofiled_source),
+            "-profile",
+            str(srgb_profile),
+            "-depth",
+            "16",
+            "-define",
+            "tiff:bits-per-sample=16",
+            f"TIFF:{source}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     )
     exiftool = _write_executable(
         tmp_path / "fake-exiftool",

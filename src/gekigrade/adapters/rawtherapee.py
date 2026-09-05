@@ -11,7 +11,7 @@ import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import BinaryIO, TypedDict
 
 from PIL import Image, TiffImagePlugin, UnidentifiedImageError
 
@@ -96,11 +96,61 @@ class RawDevelopmentResult:
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
+        return _sha256_stream(stream)
+
+
+def _sha256_stream(stream: BinaryIO) -> str:
+    digest = hashlib.sha256()
+    for block in iter(lambda: stream.read(1024 * 1024), b""):
+        digest.update(block)
     return digest.hexdigest()
+
+
+def _file_identity(status: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
+
+
+def _validate_developed_tiff(target: Path) -> str:
+    if target.is_symlink() or not target.is_file():
+        raise RawTherapeeError("RawTherapee did not create a regular, non-symlink TIFF")
+    try:
+        with target.open("rb") as stream:
+            opened_identity = _file_identity(os.fstat(stream.fileno()))
+            if stream.read(4) not in {b"II*\x00", b"MM\x00*"}:
+                raise RawTherapeeError("RawTherapee output is not a TIFF")
+            stream.seek(0)
+            output_sha256 = _sha256_stream(stream)
+            stream.seek(0)
+            with Image.open(stream) as image:
+                if not isinstance(image, TiffImagePlugin.TiffImageFile):
+                    raise OSError("decoded image is not a TIFF")
+                bits_per_sample = image.tag_v2.get(258)
+                samples_per_pixel = image.tag_v2.get(277)
+                rgb_channels = image.mode == "RGB" and image.getbands() == ("R", "G", "B")
+            closed_identity = _file_identity(os.fstat(stream.fileno()))
+        path_identity = _file_identity(target.stat())
+    except RawTherapeeError:
+        target.unlink(missing_ok=True)
+        raise
+    except (OSError, SyntaxError, UnidentifiedImageError, ValueError) as exc:
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError(f"RawTherapee output TIFF cannot be decoded: {exc}") from exc
+    if (
+        target.is_symlink()
+        or opened_identity != closed_identity
+        or path_identity != opened_identity
+    ):
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee output changed during output validation")
+    bits = (bits_per_sample,) if isinstance(bits_per_sample, int) else tuple(bits_per_sample or ())
+    if not bits or any(bit != 16 for bit in bits):
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee output TIFF must contain 16-bit samples")
+    if not rgb_channels or samples_per_pixel != 3:
+        target.unlink(missing_ok=True)
+        raise RawTherapeeError("RawTherapee output TIFF must contain exactly three RGB channels")
+    return output_sha256
 
 
 def _tool_version(executable: Path) -> str | None:
@@ -631,31 +681,7 @@ def develop_raw(
         target.unlink(missing_ok=True)
         detail = stderr or stdout or "unknown RawTherapee error"
         raise RawTherapeeError(f"RawTherapee failed: {detail}")
-    if not target.is_file() or target.is_symlink():
-        raise RawTherapeeError("RawTherapee did not create the expected TIFF")
-    with target.open("rb") as stream:
-        if stream.read(4) not in {b"II*\x00", b"MM\x00*"}:
-            target.unlink(missing_ok=True)
-            raise RawTherapeeError("RawTherapee output is not a TIFF")
-    try:
-        with Image.open(target) as image:
-            if not isinstance(image, TiffImagePlugin.TiffImageFile):
-                raise OSError("decoded image is not a TIFF")
-            bits_per_sample = image.tag_v2.get(258)
-            samples_per_pixel = image.tag_v2.get(277)
-            rgb_channels = image.mode == "RGB" and image.getbands() == ("R", "G", "B")
-    except (OSError, SyntaxError, UnidentifiedImageError) as exc:
-        target.unlink(missing_ok=True)
-        raise RawTherapeeError(f"RawTherapee output TIFF cannot be decoded: {exc}") from exc
-    bits = (bits_per_sample,) if isinstance(bits_per_sample, int) else tuple(bits_per_sample or ())
-    if not bits or any(bit != 16 for bit in bits):
-        target.unlink(missing_ok=True)
-        raise RawTherapeeError("RawTherapee output TIFF must contain 16-bit samples")
-    if not rgb_channels or samples_per_pixel != 3:
-        target.unlink(missing_ok=True)
-        raise RawTherapeeError("RawTherapee output TIFF must contain exactly three RGB channels")
-
-    output_sha256 = _sha256(target)
+    output_sha256 = _validate_developed_tiff(target)
     report["output_sha256"] = output_sha256
     write_json(report_path, report)
     return RawDevelopmentResult(

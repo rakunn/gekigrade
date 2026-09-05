@@ -5,6 +5,8 @@ import json
 import plistlib
 import shutil
 from pathlib import Path
+from types import TracebackType
+from typing import Any
 
 import numpy as np
 import OpenImageIO as oiio
@@ -38,9 +40,9 @@ def _write_rawtherapee_app(root: Path, version: str, source: str) -> Path:
     return executable
 
 
-def _write_uint16_tiff(path: Path, *, channels: int = 3) -> None:
+def _write_uint16_tiff(path: Path, *, channels: int = 3, value: int = 32768) -> None:
     buffer = oiio.ImageBuf(oiio.ImageSpec(2, 2, channels, oiio.UINT16))
-    pixels = np.full((2, 2, channels), 32768, dtype=np.uint16)
+    pixels = np.full((2, 2, channels), value, dtype=np.uint16)
     assert buffer.set_pixels(oiio.ROI(0, 2, 0, 2, 0, 1, 0, channels), pixels)
     assert buffer.write(str(path), fileformat="tiff"), buffer.geterror()
 
@@ -149,6 +151,68 @@ raise SystemExit(7)
     report = json.loads((work / "run.json").read_text(encoding="utf-8"))
     assert report["returncode"] == 7
     assert report["stderr"] == "unsupported camera data"
+
+
+def test_develop_raw_rejects_output_replaced_after_structural_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "photo.arw"
+    replacement = tmp_path / "replacement.tif"
+    _write_uint16_tiff(source, value=12000)
+    _write_uint16_tiff(replacement, value=52000)
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        """#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+""",
+    )
+    work = tmp_path / "rawtherapee"
+    target = work / "developed.tif"
+    real_open = Image.open
+
+    class ReplacingImageContext:
+        def __init__(self, opened: Image.Image) -> None:
+            self.opened = opened
+
+        def __enter__(self) -> Image.Image:
+            return self.opened.__enter__()
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_value: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            self.opened.__exit__(exc_type, exc_value, traceback)
+            shutil.copyfile(replacement, target)
+
+    def replace_after_validation(file: Any, *args: Any, **kwargs: Any) -> Any:
+        opened = real_open(file, *args, **kwargs)
+        name = getattr(file, "name", file)
+        if Path(str(name)) == target:
+            return ReplacingImageContext(opened)
+        return opened
+
+    monkeypatch.setattr(Image, "open", replace_after_validation)
+
+    with pytest.raises(RawTherapeeError, match="changed during output validation"):
+        develop_raw(
+            source,
+            target,
+            work_directory=work,
+            profile=profile,
+            executable=executable,
+        )
+
+    assert not target.exists()
 
 
 def test_develop_raw_rejects_an_unpinned_rawtherapee_version(tmp_path: Path) -> None:

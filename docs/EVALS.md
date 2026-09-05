@@ -11,6 +11,7 @@
 - Repeated renders under the same fingerprint have identical decoded-pixel hashes.
 - Repeated RAW developments use fresh isolated settings/cache directories and require zero decoded-pixel differences under the same fingerprint; container hashes may differ when the external engine writes timestamps.
 - RAW output must be exactly three-channel RGB with 16-bit samples, profile-tagged, correctly oriented, and admitted to ACEScg only after the intermediate profile is verified.
+- RawTherapee output structure and its recorded SHA-256 must come from one open file descriptor whose identity remains stable through validation; replacing the path during validation fails the job and removes the output.
 - The developed TIFF hash must match the recorded RawTherapee output before profile inspection and immediately before and after normalization.
 - RAW metadata inspection hashes the source before ExifTool and rejects any change detected immediately afterward. It records the exact resolved ExifTool path, version, and executable hash and rejects a binary change during extraction.
 - JPEG and RAW normalization plus preview encoding record the exact resolved ImageMagick path, version, and executable hash for each operation; a binary change during an operation is rejected.
@@ -25,7 +26,7 @@
 - Doctor evaluates the fixed ExifTool and ImageMagick paths used by default preparation; unrelated PATH-only installations cannot make readiness pass.
 - RAW doctor returns structured not-ready output rather than raising when RawTherapee application metadata is malformed or unreadable.
 - The expected `RTv4_Large` profile is derived from the selected RawTherapee bundle, fingerprinted across development, and required to match the developed TIFF's embedded ICC bytes.
-- Every normalized working image must decode as a three-channel, 16-bit RGB TIFF with the expected embedded ACEScg profile before preview or analysis begins.
+- Every normalized working image must decode as a three-channel, 16-bit RGB TIFF with the expected embedded ACEScg profile before preview or analysis begins. Its accepted SHA-256 is calculated from the same stable open file descriptor used for structural validation.
 - The validated working TIFF hash remains unchanged across preview generation and through manifest publication. The preview must decode as three-channel JPEG, embed the expected sRGB profile, and remain hash-stable through pixel loading and manifest publication.
 - A final RAW source check precedes the prepared manifest; a source change during manifest publication removes the manifest and fails the job.
 - Cross-platform decoded 8-bit output allows maximum channel difference 1 and RMSE 0.25; file-byte equality is not promised across encoders.

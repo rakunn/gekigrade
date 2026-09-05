@@ -557,6 +557,34 @@ def test_prepare_rejects_a_working_tiff_changed_during_preview(
     assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
+def test_prepare_binds_the_working_hash_to_the_validated_tiff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    real_validate = prepare_module._validate_working_tiff
+
+    def validate_then_replace(working: Path) -> tuple[dict[str, int], str]:
+        result = real_validate(working)
+        Image.new("RGB", (180, 120), (32, 64, 96)).save(
+            working,
+            format="TIFF",
+            icc_profile=ACESCG_PROFILE.read_bytes(),
+        )
+        return result
+
+    monkeypatch.setattr(prepare_module, "_validate_working_tiff", validate_then_replace)
+
+    with pytest.raises(RuntimeError, match="working TIFF changed before preview generation"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/preview.jpg").exists()
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
 def test_prepare_rejects_a_preview_without_the_expected_srgb_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

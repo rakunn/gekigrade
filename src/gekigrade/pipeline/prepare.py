@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, BinaryIO, cast
 
 import numpy as np
 from PIL import Image, ImageDraw, TiffImagePlugin, UnidentifiedImageError
@@ -261,19 +262,41 @@ def _embedded_profile(path: Path) -> dict[str, Any]:
     }
 
 
-def _validate_working_tiff(path: Path) -> dict[str, int]:
+def _sha256_stream(stream: BinaryIO) -> str:
+    digest = hashlib.sha256()
+    for block in iter(lambda: stream.read(1024 * 1024), b""):
+        digest.update(block)
+    return digest.hexdigest()
+
+
+def _file_identity(status: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
+
+
+def _validate_working_tiff(path: Path) -> tuple[dict[str, int], str]:
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError("working TIFF must be a regular, non-symlink file")
     try:
-        with Image.open(path) as image:
-            if not isinstance(image, TiffImagePlugin.TiffImageFile) or image.format != "TIFF":
-                raise OSError("decoded working image is not a TIFF")
-            bits_per_sample = image.tag_v2.get(258)
-            samples_per_pixel = image.tag_v2.get(277)
-            rgb_channels = image.mode == "RGB" and image.getbands() == ("R", "G", "B")
-            profile = image.info.get("icc_profile")
-            dimensions = {"width": image.width, "height": image.height}
-    except (OSError, SyntaxError, UnidentifiedImageError) as exc:
+        with path.open("rb") as stream:
+            opened_identity = _file_identity(os.fstat(stream.fileno()))
+            working_sha256 = _sha256_stream(stream)
+            stream.seek(0)
+            with Image.open(stream) as image:
+                if not isinstance(image, TiffImagePlugin.TiffImageFile) or image.format != "TIFF":
+                    raise OSError("decoded working image is not a TIFF")
+                bits_per_sample = image.tag_v2.get(258)
+                samples_per_pixel = image.tag_v2.get(277)
+                rgb_channels = image.mode == "RGB" and image.getbands() == ("R", "G", "B")
+                profile = image.info.get("icc_profile")
+                dimensions = {"width": image.width, "height": image.height}
+            closed_identity = _file_identity(os.fstat(stream.fileno()))
+        path_identity = _file_identity(path.stat())
+    except (OSError, SyntaxError, UnidentifiedImageError, ValueError) as exc:
         path.unlink(missing_ok=True)
         raise RuntimeError(f"working TIFF cannot be decoded safely: {exc}") from exc
+    if path.is_symlink() or opened_identity != closed_identity or path_identity != opened_identity:
+        path.unlink(missing_ok=True)
+        raise RuntimeError("working TIFF changed during structural validation")
     bits = (bits_per_sample,) if isinstance(bits_per_sample, int) else tuple(bits_per_sample or ())
     if not bits or any(bit != 16 for bit in bits):
         path.unlink(missing_ok=True)
@@ -286,7 +309,7 @@ def _validate_working_tiff(path: Path) -> dict[str, int]:
     ):
         path.unlink(missing_ok=True)
         raise RuntimeError("working TIFF must embed the expected ACEScg profile")
-    return dimensions
+    return dimensions, working_sha256
 
 
 def _load_validated_srgb(
@@ -512,8 +535,7 @@ def prepare_job(
             },
             "lens_correction": lens_correction,
         }
-    working_dimensions = _validate_working_tiff(working)
-    working_sha256 = sha256_file(working)
+    working_dimensions, working_sha256 = _validate_working_tiff(working)
     if source_format == "ARW":
         source["oriented_dimensions"] = working_dimensions
     if not _artifact_matches(working, working_sha256):

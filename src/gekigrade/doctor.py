@@ -70,6 +70,8 @@ def _icc_profile_status(path: Path) -> dict[str, str | bool | None]:
         "valid": False,
         "path": str(path),
         "sha256": None,
+        "color_space": None,
+        "device_class": None,
         "error": None,
     }
     flags = os.O_RDONLY | os.O_NONBLOCK
@@ -95,10 +97,21 @@ def _icc_profile_status(path: Path) -> dict[str, str | bool | None]:
     status["available"] = True
     status["sha256"] = hashlib.sha256(data).hexdigest()
     try:
-        get_open_profile = cast(Callable[[io.BytesIO], object], ImageCms.getOpenProfile)
-        get_open_profile(io.BytesIO(data))
+        get_open_profile = cast(Callable[[io.BytesIO], Any], ImageCms.getOpenProfile)
+        profile = get_open_profile(io.BytesIO(data))
     except (OSError, ImageCms.PyCMSError) as exc:
         status["error"] = str(exc)
+        return status
+    color_space = str(profile.profile.xcolor_space).strip()
+    device_class = str(profile.profile.device_class).strip()
+    status["color_space"] = color_space
+    status["device_class"] = device_class
+    if color_space != "RGB" or device_class != "mntr":
+        status["error"] = (
+            "RawTherapee output ICC must be an RGB display profile; "
+            f"found color space {color_space or 'unknown'} and class "
+            f"{device_class or 'unknown'}"
+        )
         return status
     status["valid"] = True
     return status
@@ -108,8 +121,19 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
 
+def _path_has_symlink(path: Path) -> bool:
+    current = path.absolute()
+    while True:
+        if current.is_symlink():
+            return True
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+
+
 def _rawtherapee_status() -> ToolStatus:
-    if RAWTHERAPEE_CLI.is_symlink():
+    if _path_has_symlink(RAWTHERAPEE_CLI):
         return ToolStatus(
             name="rawtherapee",
             available=False,

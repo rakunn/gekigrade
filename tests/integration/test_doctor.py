@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import plistlib
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,31 @@ import pytest
 
 import gekigrade.doctor as doctor_module
 from gekigrade.doctor import build_doctor_report
+
+
+def _write_ready_rawtherapee_bundle(
+    root: Path, *, output_profile: Path, version: str = "5.13"
+) -> Path:
+    executable = root / "RawTherapee.app/Contents/MacOS/rawtherapee-cli"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    (executable.parent.parent / "Info.plist").write_bytes(
+        plistlib.dumps({"CFBundleShortVersionString": version})
+    )
+    resources = executable.parent.parent / "Resources/share"
+    dcp_directory = resources / "dcpprofiles"
+    dcp_directory.mkdir(parents=True)
+    (dcp_directory / "camera_model_aliases.json").write_text("{}\n", encoding="utf-8")
+    (resources / "iccprofiles/input").mkdir(parents=True)
+    output_directory = resources / "iccprofiles/output"
+    output_directory.mkdir()
+    shutil.copyfile(output_profile, output_directory / "RTv4_Large.icc")
+    (resources / "camconst.json").write_text(json.dumps({"camera_constants": []}), encoding="utf-8")
+    lensfun = resources / "lensfun"
+    lensfun.mkdir()
+    (lensfun / "minimal.xml").write_text("<lensdatabase></lensdatabase>\n", encoding="utf-8")
+    return executable
 
 
 def test_doctor_confirms_milestone_one_runtime() -> None:
@@ -147,6 +173,32 @@ def test_doctor_rejects_a_symlinked_rawtherapee_executable(
     assert report["raw_status"] == "not-ready"
 
 
+def test_doctor_rejects_a_symlinked_rawtherapee_path_ancestor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = _write_ready_rawtherapee_bundle(
+        tmp_path / "target",
+        output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
+        version="5.12",
+    )
+    linked_contents = tmp_path / "linked/RawTherapee.app/Contents"
+    linked_contents.mkdir(parents=True)
+    (linked_contents / "MacOS").symlink_to(target.parent, target_is_directory=True)
+    plist = linked_contents / "Info.plist"
+    plist.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "5.13"}))
+    linked_executable = linked_contents / "MacOS/rawtherapee-cli"
+    assert linked_executable.is_symlink() is False
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_CLI", linked_executable)
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_PLIST", plist)
+
+    report = build_doctor_report(run_color_probe=False)
+
+    assert report["tools"]["rawtherapee"]["available"] is False
+    assert report["tools"]["rawtherapee"]["version"] is None
+    assert report["ready_for_raw"] is False
+    assert report["raw_status"] == "not-ready"
+
+
 def test_doctor_does_not_substitute_path_tools_for_prepare_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -217,6 +269,28 @@ def test_doctor_rejects_a_malformed_rawtherapee_output_profile(
     assert status["available"] is True
     assert status["valid"] is False
     assert status["error"]
+    assert report["ready_for_raw"] is False
+    assert report["raw_status"] == "not-ready"
+
+
+def test_doctor_requires_an_rgb_display_output_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = _write_ready_rawtherapee_bundle(
+        tmp_path,
+        output_profile=Path("/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc"),
+    )
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_CLI", executable)
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_PLIST", executable.parent.parent / "Info.plist")
+
+    report = build_doctor_report(run_color_probe=False)
+
+    status = report["profiles"]["rawtherapee_output"]
+    assert status["available"] is True
+    assert status["valid"] is False
+    assert status["color_space"] == "CMYK"
+    assert status["device_class"] == "prtr"
+    assert "RGB display profile" in status["error"]
     assert report["ready_for_raw"] is False
     assert report["raw_status"] == "not-ready"
 

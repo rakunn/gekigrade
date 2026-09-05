@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import plistlib
 import shutil
 from pathlib import Path
@@ -13,6 +14,7 @@ import OpenImageIO as oiio
 import pytest
 from PIL import Image
 
+import gekigrade.adapters.rawtherapee as rawtherapee_module
 from gekigrade.adapters.rawtherapee import (
     RawTherapeeError,
     develop_raw,
@@ -180,6 +182,64 @@ raise SystemExit(7)
     report = json.loads((work / "run.json").read_text(encoding="utf-8"))
     assert report["returncode"] == 7
     assert report["stderr"] == "unsupported camera data"
+
+
+def test_stable_source_hash_rejects_a_fifo_without_hashing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fifo = tmp_path / "photo.arw"
+    os.mkfifo(fifo)
+    original_open = os.open
+
+    def guarded_open(path: Any, flags: int) -> int:
+        assert flags & os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            assert flags & os.O_NOFOLLOW
+        return original_open(path, flags)
+
+    def reject_hash(_: object) -> str:
+        raise AssertionError("FIFO must be rejected before hashing")
+
+    monkeypatch.setattr(os, "open", guarded_open)
+    monkeypatch.setattr(rawtherapee_module, "_sha256_stream", reject_hash)
+
+    assert rawtherapee_module._stable_source_sha256(fifo) is None
+
+
+def test_develop_raw_cleans_up_if_source_disappears_during_run(tmp_path: Path) -> None:
+    source = tmp_path / "photo.arw"
+    _write_uint16_tiff(source)
+    profile = tmp_path / "neutral.pp3"
+    profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
+    executable = _write_rawtherapee_app(
+        tmp_path,
+        "5.13",
+        """#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+source = pathlib.Path(args[-1])
+shutil.copyfile(source, pathlib.Path(args[args.index("-o") + 1]))
+source.unlink()
+""",
+    )
+    work = tmp_path / "rawtherapee"
+    target = work / "developed.tif"
+
+    with pytest.raises(RawTherapeeError, match="source RAW changed"):
+        develop_raw(
+            source,
+            target,
+            work_directory=work,
+            profile=profile,
+            executable=executable,
+        )
+
+    assert not target.exists()
+    report = json.loads((work / "run.json").read_text(encoding="utf-8"))
+    assert report["source_sha256_after"] is None
 
 
 def test_develop_raw_rejects_output_replaced_after_structural_validation(

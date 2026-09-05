@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import os
 import platform
 import plistlib
+import stat
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import OpenImageIO as oiio
 import PyOpenColorIO as ocio
-from PIL import Image
+from PIL import Image, ImageCms
 
 from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
@@ -49,6 +53,50 @@ def _profile_status(path: Path) -> dict[str, str | bool | None]:
         "path": str(path),
         "sha256": sha256_file(path) if exists else None,
     }
+
+
+def _icc_profile_status(path: Path) -> dict[str, str | bool | None]:
+    status: dict[str, str | bool | None] = {
+        "available": False,
+        "valid": False,
+        "path": str(path),
+        "sha256": None,
+        "error": None,
+    }
+    flags = os.O_RDONLY | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                raise OSError("profile is not a regular file")
+            data = stream.read()
+            closed = os.fstat(stream.fileno())
+        path_status = path.lstat()
+        if (
+            not stat.S_ISREG(path_status.st_mode)
+            or _file_identity(opened) != _file_identity(closed)
+            or _file_identity(path_status) != _file_identity(opened)
+        ):
+            raise OSError("profile changed while it was read")
+    except OSError as exc:
+        status["error"] = str(exc)
+        return status
+    status["available"] = True
+    status["sha256"] = hashlib.sha256(data).hexdigest()
+    try:
+        get_open_profile = cast(Callable[[io.BytesIO], object], ImageCms.getOpenProfile)
+        get_open_profile(io.BytesIO(data))
+    except (OSError, ImageCms.PyCMSError) as exc:
+        status["error"] = str(exc)
+        return status
+    status["valid"] = True
+    return status
+
+
+def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
 
 def _rawtherapee_status() -> ToolStatus:
@@ -170,7 +218,7 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
         "acescg": _profile_status(ACESCG_PROFILE),
         "srgb": _profile_status(SRGB_PROFILE),
         "raw_development_pp3": raw_profile_status,
-        "rawtherapee_output": _profile_status(rawtherapee_output_profile),
+        "rawtherapee_output": _icc_profile_status(rawtherapee_output_profile),
         "rawtherapee_camera_resources": camera_resources,
         "lensfun_database": lensfun_database,
     }
@@ -190,6 +238,7 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
         and tools["rawtherapee"].version == SUPPORTED_RAWTHERAPEE_VERSION
         and profiles["raw_development_pp3"]["matches_expected"] is True
         and profiles["rawtherapee_output"]["available"] is True
+        and profiles["rawtherapee_output"]["valid"] is True
         and camera_resources["ready"]
         and lensfun_database["ready"]
     )

@@ -34,6 +34,7 @@ def test_doctor_reports_raw_adapter_separately_from_jpeg_readiness() -> None:
     assert report["profiles"]["raw_development_pp3"]["sha256"]
     assert report["profiles"]["raw_development_pp3"]["matches_expected"] is True
     assert report["profiles"]["rawtherapee_output"]["sha256"]
+    assert report["profiles"]["rawtherapee_output"]["valid"] is True
     assert report["profiles"]["lensfun_database"]["sha256"]
     assert report["profiles"]["lensfun_database"]["ready"] is True
     assert report["profiles"]["rawtherapee_camera_resources"]["ready"] is True
@@ -157,6 +158,40 @@ def test_doctor_rejects_a_symlinked_rawtherapee_output_profile(
     assert report["profiles"]["rawtherapee_output"]["available"] is False
     assert report["profiles"]["rawtherapee_output"]["sha256"] is None
     assert report["ready_for_raw"] is False
+
+
+def test_doctor_rejects_a_malformed_rawtherapee_output_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "RawTherapee.app/Contents/MacOS/rawtherapee-cli"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    plist = executable.parent.parent / "Info.plist"
+    plist.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "5.13"}))
+    resources = executable.parent.parent / "Resources/share"
+    dcp_directory = resources / "dcpprofiles"
+    dcp_directory.mkdir(parents=True)
+    (dcp_directory / "camera_model_aliases.json").write_text("{}\n", encoding="utf-8")
+    (resources / "iccprofiles/input").mkdir(parents=True)
+    output_profile = resources / "iccprofiles/output/RTv4_Large.icc"
+    output_profile.parent.mkdir()
+    output_profile.write_bytes(b"not-an-icc-profile")
+    (resources / "camconst.json").write_text(json.dumps({"camera_constants": []}), encoding="utf-8")
+    lensfun = resources / "lensfun"
+    lensfun.mkdir()
+    (lensfun / "minimal.xml").write_text("<lensdatabase></lensdatabase>\n", encoding="utf-8")
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_CLI", executable)
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_PLIST", plist)
+
+    report = build_doctor_report(run_color_probe=False)
+
+    status = report["profiles"]["rawtherapee_output"]
+    assert status["available"] is True
+    assert status["valid"] is False
+    assert status["error"]
+    assert report["ready_for_raw"] is False
+    assert report["raw_status"] == "not-ready"
 
 
 def test_doctor_requires_parseable_camera_resources(

@@ -6,6 +6,7 @@ import os
 import plistlib
 import re
 import shutil
+import stat
 import subprocess
 import time
 import xml.etree.ElementTree as ET
@@ -112,6 +113,30 @@ def _sha256_stream(stream: BinaryIO) -> str:
 
 def _file_identity(status: os.stat_result) -> tuple[int, int, int, int, int]:
     return (status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
+
+
+def _stable_source_sha256(path: Path) -> str | None:
+    flags = os.O_RDONLY | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            opened_status = os.fstat(stream.fileno())
+            opened_identity = _file_identity(opened_status)
+            if not stat.S_ISREG(opened_status.st_mode):
+                return None
+            digest = _sha256_stream(stream)
+            closed_identity = _file_identity(os.fstat(stream.fileno()))
+        path_status = path.lstat()
+    except OSError:
+        return None
+    if (
+        not stat.S_ISREG(path_status.st_mode)
+        or opened_identity != closed_identity
+        or _file_identity(path_status) != opened_identity
+    ):
+        return None
+    return digest
 
 
 def _validate_developed_tiff(target: Path) -> str:
@@ -622,7 +647,9 @@ def develop_raw(
         "RT_SETTINGS": str(settings),
         "TMPDIR": str(temporary),
     }
-    before = _sha256(source)
+    before = _stable_source_sha256(source)
+    if before is None:
+        raise RawTherapeeError("source RAW is not a stable regular file before development")
     tool_version = _tool_version(executable)
     if tool_version != SUPPORTED_RAWTHERAPEE_VERSION:
         found = tool_version or "unknown"
@@ -651,7 +678,7 @@ def develop_raw(
         stderr = ""
         execution_error = str(exc)
 
-    after = _sha256(source)
+    after = _stable_source_sha256(source)
     tool_version_after = _tool_version(executable)
     try:
         executable_sha256_after = _sha256(executable)

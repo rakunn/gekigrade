@@ -556,7 +556,7 @@ def test_prepare_removes_a_manifest_if_the_raw_changes_while_it_is_published(
     original_manifest = prepare_module._artifact_manifest
 
     def build_manifest_then_change_source(
-        job: Path, metadata: dict[str, object], **profile_hashes: str
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
     ) -> dict[str, object]:
         manifest = original_manifest(job, metadata, **profile_hashes)
         with source.open("ab") as stream:
@@ -621,7 +621,7 @@ def test_prepare_removes_manifest_if_raw_disappears_while_published(
     original_manifest = prepare_module._artifact_manifest
 
     def build_manifest_then_remove_source(
-        job: Path, metadata: dict[str, object], **profile_hashes: str
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
     ) -> dict[str, object]:
         manifest = original_manifest(job, metadata, **profile_hashes)
         source.unlink()
@@ -646,7 +646,7 @@ def test_prepare_removes_manifest_if_copied_raw_profile_changes_while_published(
     original_manifest = prepare_module._artifact_manifest
 
     def build_manifest_then_change_profile(
-        job: Path, metadata: dict[str, object], **profile_hashes: str
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
     ) -> dict[str, object]:
         manifest = original_manifest(job, metadata, **profile_hashes)
         (job / "intermediate/rawtherapee/development.pp3").write_text(
@@ -657,6 +657,31 @@ def test_prepare_removes_manifest_if_copied_raw_profile_changes_while_published(
     monkeypatch.setattr(prepare_module, "_artifact_manifest", build_manifest_then_change_profile)
 
     with pytest.raises(RawTherapeeError, match="profile changed while publishing"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+def test_prepare_removes_manifest_if_raw_output_profile_changes_while_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    output_profile = rawtherapee.parent.parent / "Resources/share/iccprofiles/output/RTv4_Large.icc"
+    original_manifest = prepare_module._artifact_manifest
+
+    def change_profile_then_build_manifest(
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
+    ) -> dict[str, object]:
+        output_profile.write_bytes(b"changed-while-publishing-manifest")
+        return original_manifest(job, metadata, **profile_hashes)
+
+    monkeypatch.setattr(prepare_module, "_artifact_manifest", change_profile_then_build_manifest)
+
+    with pytest.raises(RawTherapeeError, match="output ICC profile changed while publishing"):
         prepare_job(
             source,
             tmp_path / "raw-job",
@@ -684,7 +709,7 @@ def test_prepare_removes_manifest_if_validated_profile_changes_while_published(
     original_manifest = prepare_module._artifact_manifest
 
     def build_manifest_then_change_profile(
-        job: Path, metadata: dict[str, object], **profile_hashes: str
+        job: Path, metadata: dict[str, object], **profile_hashes: Any
     ) -> dict[str, object]:
         manifest = original_manifest(job, metadata, **profile_hashes)
         profile.write_bytes(b"changed-while-publishing-manifest")

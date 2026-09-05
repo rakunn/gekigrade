@@ -500,6 +500,7 @@ def _artifact_manifest(
     *,
     working_profile_sha256: str,
     output_profile_sha256: str,
+    raw_output_profile_artifact: tuple[Path, str] | None = None,
 ) -> dict[str, Any]:
     doctor = build_doctor_report(run_color_probe=False)
     doctor["profiles"]["acescg"] = {
@@ -512,6 +513,10 @@ def _artifact_manifest(
         "path": str(SRGB_PROFILE),
         "sha256": output_profile_sha256,
     }
+    if raw_output_profile_artifact is not None:
+        raw_output_profile, raw_output_profile_sha256 = raw_output_profile_artifact
+        doctor["profiles"]["rawtherapee_output"]["path"] = str(raw_output_profile)
+        doctor["profiles"]["rawtherapee_output"]["sha256"] = raw_output_profile_sha256
     artifacts: dict[str, dict[str, Any]] = {}
     for path in sorted(job.rglob("*")):
         if path.is_file() and path.name != "manifest.json":
@@ -562,6 +567,7 @@ def prepare_job(
     working = job / "intermediate/working.tif"
     preview = job / "preview.jpg"
     raw_profile_artifact: tuple[Path, str] | None = None
+    raw_output_profile_artifact: tuple[Path, str] | None = None
     if source_format == "JPEG":
         normalization_tool = normalize_jpeg(
             source_path.resolve(),
@@ -577,6 +583,10 @@ def prepare_job(
         if raw_output_profile.is_symlink() or not raw_output_profile.is_file():
             raise RuntimeError("expected RawTherapee output ICC profile is unavailable")
         expected_intermediate_profile_sha256 = sha256_file(raw_output_profile)
+        raw_output_profile_artifact = (
+            raw_output_profile,
+            expected_intermediate_profile_sha256,
+        )
         camera_input_profile = inspect_camera_input_profile(
             source["capture_metadata"], executable=rawtherapee_executable
         )
@@ -722,6 +732,10 @@ def prepare_job(
         raise RawTherapeeError("source RAW changed during job preparation")
     if raw_profile_artifact is not None and not _artifact_matches(*raw_profile_artifact):
         raise RawTherapeeError("copied RAW development profile changed before manifest publication")
+    if raw_output_profile_artifact is not None and not _artifact_matches(
+        *raw_output_profile_artifact
+    ):
+        raise RawTherapeeError("RawTherapee output ICC profile changed before manifest publication")
     if not _artifact_matches(ACESCG_PROFILE, working_profile_sha256) or not _artifact_matches(
         SRGB_PROFILE, output_profile_sha256
     ):
@@ -734,6 +748,7 @@ def prepare_job(
             source,
             working_profile_sha256=working_profile_sha256,
             output_profile_sha256=output_profile_sha256,
+            raw_output_profile_artifact=raw_output_profile_artifact,
         ),
     )
     if not _artifact_matches(working, working_sha256) or not _artifact_matches(
@@ -755,5 +770,12 @@ def prepare_job(
         manifest_path.unlink(missing_ok=True)
         raise RawTherapeeError(
             "copied RAW development profile changed while publishing the manifest"
+        )
+    if raw_output_profile_artifact is not None and not _artifact_matches(
+        *raw_output_profile_artifact
+    ):
+        manifest_path.unlink(missing_ok=True)
+        raise RawTherapeeError(
+            "RawTherapee output ICC profile changed while publishing the manifest"
         )
     return job

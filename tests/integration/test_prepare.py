@@ -19,6 +19,7 @@ from gekigrade.adapters.imagemagick import ProcessorIdentity
 from gekigrade.adapters.imagemagick import make_preview as real_make_preview
 from gekigrade.adapters.imagemagick import normalize_profiled_tiff as real_normalize_profiled_tiff
 from gekigrade.adapters.rawtherapee import DEFAULT_RAW_PROFILE, RawTherapeeError
+from gekigrade.doctor import ACESCG_PROFILE
 from gekigrade.domain.models import EditPlan
 from gekigrade.domain.paths import create_job_directory as real_create_job_directory
 from gekigrade.pipeline.prepare import inspect_photo, prepare_job
@@ -46,6 +47,12 @@ def _write_rawtherapee_app(root: Path, source: str) -> Path:
     (dcp_directory / "camera_model_aliases.json").write_text("{}\n", encoding="utf-8")
     (dcp_directory / "SONY ILCE-TEST.dcp").write_bytes(b"synthetic-test-dcp")
     (resources / "iccprofiles/input").mkdir(parents=True)
+    output_profiles = resources / "iccprofiles/output"
+    output_profiles.mkdir()
+    shutil.copyfile(
+        "/System/Library/ColorSync/Profiles/sRGB Profile.icc",
+        output_profiles / "RTv4_Large.icc",
+    )
     (resources / "camconst.json").write_text('{"camera_constants": []}\n', encoding="utf-8")
     return executable
 
@@ -256,7 +263,6 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
         job,
         exiftool_executable=exiftool,
         rawtherapee_executable=rawtherapee,
-        raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
         imagemagick_executable=Path("/opt/homebrew/bin/magick"),
     )
 
@@ -298,6 +304,11 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
         development["intermediate_profile"]["sha256"]
         == development["expected_intermediate_profile_sha256"]
     )
+    expected_output_profile = (
+        rawtherapee.parent.parent / "Resources/share/iccprofiles/output/RTv4_Large.icc"
+    )
+    assert development["expected_intermediate_profile_path"] == str(expected_output_profile)
+    assert development["expected_intermediate_profile_sha256"] == _sha256(expected_output_profile)
     assert development["working_profile_sha256"]
     assert development["lens_correction"]["camera_match"] is True
     assert development["lens_correction"]["lens_match"] is True
@@ -317,6 +328,7 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
 
 def test_prepare_does_not_expose_a_raw_profile_override() -> None:
     assert "raw_profile" not in inspect.signature(prepare_job).parameters
+    assert "raw_output_profile" not in inspect.signature(prepare_job).parameters
 
 
 def test_prepare_rejects_a_raw_source_changed_after_inspection(
@@ -338,7 +350,6 @@ def test_prepare_rejects_a_raw_source_changed_after_inspection(
             tmp_path / "raw-job",
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
-            raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
         )
 
 
@@ -363,7 +374,6 @@ def test_prepare_rechecks_the_raw_source_before_success(
             tmp_path / "raw-job",
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
-            raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
         )
     assert not (tmp_path / "raw-job/manifest.json").exists()
 
@@ -390,7 +400,6 @@ def test_prepare_removes_a_manifest_if_the_raw_changes_while_it_is_published(
             tmp_path / "raw-job",
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
-            raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
         )
     assert not (tmp_path / "raw-job/manifest.json").exists()
 
@@ -418,7 +427,32 @@ with pathlib.Path({str(lensfun_file)!r}).open("a", encoding="utf-8") as stream:
             tmp_path / "raw-job",
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
-            raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
+        )
+
+
+def test_prepare_rejects_a_raw_output_profile_changed_during_development(tmp_path: Path) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    output_profile = rawtherapee.parent.parent / "Resources/share/iccprofiles/output/RTv4_Large.icc"
+    _write_executable(
+        rawtherapee,
+        f"""#!/usr/bin/env python3
+import pathlib
+import shutil
+import sys
+
+args = sys.argv[1:]
+shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1]))
+with pathlib.Path({str(output_profile)!r}).open("ab") as stream:
+    stream.write(b"changed during development")
+""",
+    )
+
+    with pytest.raises(RawTherapeeError, match="output ICC profile changed"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
         )
 
 
@@ -447,8 +481,40 @@ def test_prepare_rejects_a_developed_tiff_replaced_during_normalization(
             tmp_path / "raw-job",
             exiftool_executable=exiftool,
             rawtherapee_executable=rawtherapee,
-            raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
         )
+
+
+def test_prepare_rejects_an_invalid_normalized_raw_working_tiff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+
+    def write_eight_bit_working(
+        developed: Path, working: Path, *, executable: Path
+    ) -> ProcessorIdentity:
+        del developed, executable
+        Image.new("RGB", (180, 120), (32, 64, 96)).save(
+            working,
+            format="TIFF",
+            icc_profile=ACESCG_PROFILE.read_bytes(),
+        )
+        return {
+            "name": "ImageMagick",
+            "path": "/test/magick",
+            "version": "test",
+            "executable_sha256": "a" * 64,
+        }
+
+    monkeypatch.setattr(prepare_module, "normalize_profiled_tiff", write_eight_bit_working)
+
+    with pytest.raises(RuntimeError, match="working TIFF must contain 16-bit samples"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/intermediate/working.tif").exists()
 
 
 def test_inspect_rejects_a_raw_source_changed_during_metadata_read(tmp_path: Path) -> None:

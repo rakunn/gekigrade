@@ -145,6 +145,15 @@ def lensfun_database_for_executable(executable: Path = RAWTHERAPEE_CLI) -> Path:
     return executable.resolve(strict=False).parent.parent / "Resources/share/lensfun"
 
 
+def rawtherapee_output_profile_for_executable(
+    executable: Path = RAWTHERAPEE_CLI,
+) -> Path:
+    return (
+        executable.resolve(strict=False).parent.parent
+        / "Resources/share/iccprofiles/output/RTv4_Large.icc"
+    )
+
+
 def _load_json_object(path: Path, label: str) -> dict[object, object]:
     if path.is_symlink() or not path.is_file():
         raise RawTherapeeError(f"RawTherapee {label} is unavailable: {path}")

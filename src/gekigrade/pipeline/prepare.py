@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, TiffImagePlugin, UnidentifiedImageError
 
 from gekigrade.adapters.imagemagick import (
     MAGICK,
@@ -18,12 +18,12 @@ from gekigrade.adapters.imagemagick import (
 from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
     RAWTHERAPEE_CLI,
-    RAWTHERAPEE_OUTPUT_PROFILE,
     RawTherapeeError,
     develop_raw,
     inspect_camera_input_profile,
     inspect_lensfun_support,
     lensfun_database_for_executable,
+    rawtherapee_output_profile_for_executable,
 )
 from gekigrade.analysis.metrics import analyze_srgb
 from gekigrade.doctor import ACESCG_PROFILE, SRGB_PROFILE, build_doctor_report, sha256_file
@@ -253,6 +253,34 @@ def _embedded_profile(path: Path) -> dict[str, Any]:
     }
 
 
+def _validate_working_tiff(path: Path) -> dict[str, int]:
+    try:
+        with Image.open(path) as image:
+            if not isinstance(image, TiffImagePlugin.TiffImageFile) or image.format != "TIFF":
+                raise OSError("decoded working image is not a TIFF")
+            bits_per_sample = image.tag_v2.get(258)
+            samples_per_pixel = image.tag_v2.get(277)
+            rgb_channels = image.mode == "RGB" and image.getbands() == ("R", "G", "B")
+            profile = image.info.get("icc_profile")
+            dimensions = {"width": image.width, "height": image.height}
+    except (OSError, SyntaxError, UnidentifiedImageError) as exc:
+        path.unlink(missing_ok=True)
+        raise RuntimeError(f"working TIFF cannot be decoded safely: {exc}") from exc
+    bits = (bits_per_sample,) if isinstance(bits_per_sample, int) else tuple(bits_per_sample or ())
+    if not bits or any(bit != 16 for bit in bits):
+        path.unlink(missing_ok=True)
+        raise RuntimeError("working TIFF must contain 16-bit samples")
+    if not rgb_channels or samples_per_pixel != 3:
+        path.unlink(missing_ok=True)
+        raise RuntimeError("working TIFF must contain exactly three RGB channels")
+    if not isinstance(profile, bytes) or hashlib.sha256(profile).hexdigest() != sha256_file(
+        ACESCG_PROFILE
+    ):
+        path.unlink(missing_ok=True)
+        raise RuntimeError("working TIFF must embed the expected ACEScg profile")
+    return dimensions
+
+
 def _load_srgb(path: Path) -> np.ndarray[Any, np.dtype[np.float32]]:
     with Image.open(path) as image:
         return np.asarray(image.convert("RGB"), dtype=np.float32) / np.float32(255.0)
@@ -342,7 +370,6 @@ def prepare_job(
     *,
     exiftool_executable: Path = EXIFTOOL,
     rawtherapee_executable: Path = RAWTHERAPEE_CLI,
-    raw_output_profile: Path = RAWTHERAPEE_OUTPUT_PROFILE,
     imagemagick_executable: Path = MAGICK,
 ) -> Path:
     signature = _source_signature(source_path)
@@ -370,6 +397,10 @@ def prepare_job(
         raw_work = job / "intermediate/rawtherapee"
         developed = raw_work / "developed.tif"
         lensfun_database = lensfun_database_for_executable(rawtherapee_executable)
+        raw_output_profile = rawtherapee_output_profile_for_executable(rawtherapee_executable)
+        if raw_output_profile.is_symlink() or not raw_output_profile.is_file():
+            raise RuntimeError("expected RawTherapee output ICC profile is unavailable")
+        expected_intermediate_profile_sha256 = sha256_file(raw_output_profile)
         camera_input_profile = inspect_camera_input_profile(
             source["capture_metadata"], executable=rawtherapee_executable
         )
@@ -402,9 +433,12 @@ def prepare_job(
         if sha256_file(developed) != result.output_sha256:
             raise RawTherapeeError("developed TIFF changed before profile inspection")
         intermediate_profile = _embedded_profile(developed)
-        if not raw_output_profile.is_file():
-            raise RuntimeError("expected RawTherapee output ICC profile is unavailable")
-        expected_intermediate_profile_sha256 = sha256_file(raw_output_profile)
+        if (
+            raw_output_profile.is_symlink()
+            or not raw_output_profile.is_file()
+            or sha256_file(raw_output_profile) != expected_intermediate_profile_sha256
+        ):
+            raise RawTherapeeError("RawTherapee output ICC profile changed during development")
         if intermediate_profile["sha256"] != expected_intermediate_profile_sha256:
             raise RuntimeError("developed TIFF ICC profile does not match the expected profile")
         normalization_input_sha256 = sha256_file(developed)
@@ -416,11 +450,6 @@ def prepare_job(
         if sha256_file(developed) != normalization_input_sha256:
             working.unlink(missing_ok=True)
             raise RawTherapeeError("developed TIFF changed during normalization")
-        with Image.open(working) as normalized:
-            source["oriented_dimensions"] = {
-                "width": normalized.width,
-                "height": normalized.height,
-            }
         source["raw_development"] = {
             "engine": "RawTherapee",
             "profile_path": str(result.profile_path.relative_to(job)),
@@ -429,6 +458,7 @@ def prepare_job(
             "run_report_path": str(result.report_path.relative_to(job)),
             "developed_tiff_sha256": result.output_sha256,
             "intermediate_profile": intermediate_profile,
+            "expected_intermediate_profile_path": str(raw_output_profile),
             "expected_intermediate_profile_sha256": expected_intermediate_profile_sha256,
             "working_profile_sha256": sha256_file(ACESCG_PROFILE),
             "requested_capabilities": {
@@ -443,6 +473,9 @@ def prepare_job(
             },
             "lens_correction": lens_correction,
         }
+    working_dimensions = _validate_working_tiff(working)
+    if source_format == "ARW":
+        source["oriented_dimensions"] = working_dimensions
     preview_tool = make_preview(working, preview, executable=imagemagick_executable)
     source["processing_tools"] = {
         "normalization": normalization_tool,

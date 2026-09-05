@@ -17,11 +17,11 @@ from PIL import Image
 
 from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
-    RAWTHERAPEE_OUTPUT_PROFILE,
     SUPPORTED_RAWTHERAPEE_VERSION,
     inspect_camera_resources,
     inspect_lensfun_database,
     lensfun_database_for_executable,
+    rawtherapee_output_profile_for_executable,
 )
 from gekigrade.adapters.tools import ExternalTool, ToolStatus, inspect_tool
 
@@ -51,9 +51,12 @@ def _profile_status(path: Path) -> dict[str, str | bool | None]:
 def _rawtherapee_status() -> ToolStatus:
     version: str | None = None
     if RAWTHERAPEE_PLIST.is_file():
-        with RAWTHERAPEE_PLIST.open("rb") as stream:
-            raw_version = plistlib.load(stream).get("CFBundleShortVersionString")
-            version = str(raw_version) if raw_version else None
+        try:
+            with RAWTHERAPEE_PLIST.open("rb") as stream:
+                raw_version = plistlib.load(stream).get("CFBundleShortVersionString")
+                version = str(raw_version) if raw_version else None
+        except (OSError, plistlib.InvalidFileException):
+            version = None
     available = RAWTHERAPEE_CLI.is_file() and RAWTHERAPEE_CLI.stat().st_mode & 0o111 != 0
     return ToolStatus(
         name="rawtherapee",
@@ -123,6 +126,7 @@ def _color_probe(magick_path: str) -> dict[str, Any]:
 
 
 def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
+    rawtherapee_output_profile = rawtherapee_output_profile_for_executable(RAWTHERAPEE_CLI)
     tools = {
         "exiftool": inspect_tool(
             ExternalTool(
@@ -150,7 +154,7 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
         "acescg": _profile_status(ACESCG_PROFILE),
         "srgb": _profile_status(SRGB_PROFILE),
         "raw_development_pp3": _profile_status(DEFAULT_RAW_PROFILE),
-        "rawtherapee_output": _profile_status(RAWTHERAPEE_OUTPUT_PROFILE),
+        "rawtherapee_output": _profile_status(rawtherapee_output_profile),
         "rawtherapee_camera_resources": camera_resources,
         "lensfun_database": lensfun_database,
     }

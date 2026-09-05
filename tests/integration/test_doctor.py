@@ -59,6 +59,25 @@ def test_doctor_does_not_mark_an_unpinned_rawtherapee_version_ready(
     assert report["raw_status"] == "not-ready"
 
 
+def test_doctor_reports_malformed_rawtherapee_metadata_as_not_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "RawTherapee.app/Contents/MacOS/rawtherapee-cli"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    plist = executable.parent.parent / "Info.plist"
+    plist.write_text("not-a-plist", encoding="utf-8")
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_CLI", executable)
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_PLIST", plist)
+
+    report = build_doctor_report(run_color_probe=False)
+
+    assert report["tools"]["rawtherapee"]["version"] is None
+    assert report["ready_for_raw"] is False
+    assert report["raw_status"] == "not-ready"
+
+
 def test_doctor_requires_parseable_camera_resources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

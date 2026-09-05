@@ -21,6 +21,9 @@
 - Lensfun inspection is derived from the selected RawTherapee bundle, searches and fingerprints every bundled XML file including third-party lens files, requires overlapping camera and lens mounts, and keeps the aggregate fingerprint unchanged during development.
 - Lensfun camera/lens database matches and actual-application confirmation are separate fields; absent CLI confirmation must remain false.
 - RAW doctor readiness requires present camera-profile directories, a parseable alias map, structurally valid RawTherapee JSON-with-comments camera constants, and a complete parseable Lensfun XML set.
+- RAW doctor returns structured not-ready output rather than raising when RawTherapee application metadata is malformed or unreadable.
+- The expected `RTv4_Large` profile is derived from the selected RawTherapee bundle, fingerprinted across development, and required to match the developed TIFF's embedded ICC bytes.
+- Every normalized working image must decode as a three-channel, 16-bit RGB TIFF with the expected embedded ACEScg profile before preview or analysis begins.
 - A final RAW source check precedes the prepared manifest; a source change during manifest publication removes the manifest and fails the job.
 - Cross-platform decoded 8-bit output allows maximum channel difference 1 and RMSE 0.25; file-byte equality is not promised across encoders.
 - Manifest records source, schema, plan, recipe, tool, profile, intermediate, candidate, selection, master, and derivative provenance.

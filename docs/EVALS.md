@@ -20,6 +20,7 @@
 - ImageMagick receives private ICC snapshots whose hashes remain stable across the command. A changed snapshot or source system profile rejects and removes the produced artifact.
 - ImageMagick receives only the recorded allowlisted environment with fixed locale, system path, and single-thread ImageMagick/OpenMP settings; caller configuration and module paths do not cross the subprocess boundary.
 - Each ImageMagick adapter result contains the SHA-256 of a regular, non-symlink, identity-stable output; working-TIFF and preview validation must reproduce that exact invocation-bound hash.
+- ImageMagick writes working and preview pixels only to a private staged path. A symlink raced into the public destination must be atomically replaced without modifying its target, and the published artifact must retain the staged output hash.
 - RawTherapee camera-input provenance records the selected DCP or ICC profile, or the camera-matrix fallback, together with camera-alias and camera-constants hashes; the resource fingerprint must remain unchanged during development.
 - RawTherapee executable version and file hash are captured before launch and must remain unchanged after exit.
 - The accepted RawTherapee output ICC path/hash remains unchanged through manifest publication; its complete availability, validity, color-space, device-class, error, path, and hash status comes from the selected bundle and is recorded in the manifest tool snapshot.

@@ -134,7 +134,7 @@ def test_normalize_profiled_tiff_uses_one_stable_private_acescg_snapshot(
         captured_snapshot = profile_paths[0]
         assert captured_snapshot != ACESCG_PROFILE
         assert captured_snapshot.read_bytes() == ACESCG_PROFILE.read_bytes()
-        target.write_bytes(b"normalized")
+        Path(arguments[-1].removeprefix("TIFF:")).write_bytes(b"normalized")
         return {
             "name": "ImageMagick",
             "path": "/test/magick",
@@ -166,7 +166,7 @@ def test_normalize_profiled_tiff_rejects_a_changed_profile_snapshot(
         snapshot = Path(arguments[arguments.index("-profile") + 1])
         assert snapshot != ACESCG_PROFILE
         snapshot.write_bytes(b"changed")
-        target.write_bytes(b"invalid normalized output")
+        Path(arguments[-1].removeprefix("TIFF:")).write_bytes(b"invalid normalized output")
         return {
             "name": "ImageMagick",
             "path": "/test/magick",
@@ -180,3 +180,37 @@ def test_normalize_profiled_tiff_rejects_a_changed_profile_snapshot(
     with pytest.raises(ProcessorError, match="profile snapshot changed"):
         normalize_profiled_tiff(source, target, executable=tmp_path / "magick")
     assert not target.exists()
+
+
+def test_normalize_profiled_tiff_does_not_follow_a_raced_output_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.arw"
+    source.write_bytes(b"protected source bytes")
+    source_before = source.read_bytes()
+    target = tmp_path / "working.tif"
+
+    def race_final_target(
+        arguments: list[str], *, executable: Path, timeout_seconds: float = 120.0
+    ) -> ProcessorIdentity:
+        del executable, timeout_seconds
+        target.symlink_to(source)
+        output = Path(arguments[-1].removeprefix("TIFF:"))
+        assert output.is_file()
+        assert not output.is_symlink()
+        output.write_bytes(b"normalized output")
+        return {
+            "name": "ImageMagick",
+            "path": "/test/magick",
+            "version": "test",
+            "executable_sha256": "a" * 64,
+            "environment": MAGICK_ENVIRONMENT,
+        }
+
+    monkeypatch.setattr("gekigrade.adapters.imagemagick.run_magick", race_final_target)
+
+    result = normalize_profiled_tiff(source, target, executable=tmp_path / "magick")
+
+    assert source.read_bytes() == source_before
+    assert target.read_bytes() == b"normalized output"
+    assert result["output_sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()

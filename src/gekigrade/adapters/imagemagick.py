@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -65,8 +66,10 @@ def _file_identity(status: os.stat_result) -> tuple[int, int, int, int, int]:
 
 
 def _bind_output(target: Path, identity: ProcessorIdentity) -> ProcessorResult:
-    if target.is_symlink() or not target.is_file():
+    if target.is_symlink():
         target.unlink(missing_ok=True)
+        raise ProcessorError("ImageMagick output must be a regular, non-symlink file")
+    if not target.is_file():
         raise ProcessorError("ImageMagick output must be a regular, non-symlink file")
     try:
         with target.open("rb") as stream:
@@ -87,6 +90,42 @@ def _bind_output(target: Path, identity: ProcessorIdentity) -> ProcessorResult:
         target.unlink(missing_ok=True)
         raise ProcessorError("ImageMagick output changed while it was fingerprinted")
     return {**identity, "output_sha256": digest.hexdigest()}
+
+
+@contextmanager
+def _private_output_path(target: Path) -> Iterator[Path]:
+    if target.exists() or target.is_symlink():
+        raise ProcessorError(f"ImageMagick output already exists: {target}")
+    if target.parent.is_symlink() or not target.parent.is_dir():
+        raise ProcessorError("ImageMagick output directory is unavailable or unsafe")
+    try:
+        with tempfile.TemporaryDirectory(prefix=f".{target.name}.", dir=target.parent) as directory:
+            staged = Path(directory) / target.name
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            os.close(os.open(staged, flags, 0o600))
+            yield staged
+    except OSError as exc:
+        if target.is_symlink():
+            target.unlink(missing_ok=True)
+        raise ProcessorError(f"ImageMagick private output could not be secured: {exc}") from exc
+
+
+def _publish_output(staged: Path, target: Path, identity: ProcessorIdentity) -> ProcessorResult:
+    staged_result = _bind_output(staged, identity)
+    try:
+        staged.replace(target)
+    except OSError as exc:
+        staged.unlink(missing_ok=True)
+        if target.is_symlink():
+            target.unlink(missing_ok=True)
+        raise ProcessorError(f"ImageMagick output could not be published safely: {exc}") from exc
+    published_result = _bind_output(target, identity)
+    if published_result["output_sha256"] != staged_result["output_sha256"]:
+        target.unlink(missing_ok=True)
+        raise ProcessorError("ImageMagick output changed while it was published")
+    return published_result
 
 
 @contextmanager
@@ -199,56 +238,58 @@ def normalize_jpeg(
     required_profiles = {"working": ACESCG_PROFILE}
     if not has_profile:
         required_profiles["assumed-input"] = SRGB_PROFILE
-    with _stable_profile_snapshots(target, required_profiles) as profiles:
-        arguments = [str(source), "-auto-orient"]
-        if not has_profile:
-            arguments.extend(["-profile", str(profiles["assumed-input"])])
-        arguments.extend(
-            [
-                "-profile",
-                str(profiles["working"]),
-                "-alpha",
-                "off",
-                "-depth",
-                "16",
-                "-define",
-                "tiff:bits-per-sample=16",
-                "-compress",
-                "zip",
-                f"TIFF:{target}",
-            ]
-        )
-        identity = run_magick(arguments, executable=executable)
-        return _bind_output(target, identity)
+    with _private_output_path(target) as staged:
+        with _stable_profile_snapshots(staged, required_profiles) as profiles:
+            arguments = [str(source), "-auto-orient"]
+            if not has_profile:
+                arguments.extend(["-profile", str(profiles["assumed-input"])])
+            arguments.extend(
+                [
+                    "-profile",
+                    str(profiles["working"]),
+                    "-alpha",
+                    "off",
+                    "-depth",
+                    "16",
+                    "-define",
+                    "tiff:bits-per-sample=16",
+                    "-compress",
+                    "zip",
+                    f"TIFF:{staged}",
+                ]
+            )
+            identity = run_magick(arguments, executable=executable)
+        return _publish_output(staged, target, identity)
 
 
 def normalize_profiled_tiff(
     source: Path, target: Path, *, executable: Path = MAGICK
 ) -> ProcessorResult:
-    with _stable_profile_snapshots(target, {"working": ACESCG_PROFILE}) as profiles:
-        working_profile = str(profiles["working"])
-        identity = run_magick(
-            [
-                str(source),
-                "-auto-orient",
-                "-profile",
-                working_profile,
-                "-alpha",
-                "off",
-                "-depth",
-                "16",
-                "-strip",
-                "-profile",
-                working_profile,
-                "-define",
-                "tiff:bits-per-sample=16",
-                "-compress",
-                "zip",
-                f"TIFF:{target}",
-            ],
-            executable=executable,
-        )
-        return _bind_output(target, identity)
+    with _private_output_path(target) as staged:
+        with _stable_profile_snapshots(staged, {"working": ACESCG_PROFILE}) as profiles:
+            working_profile = str(profiles["working"])
+            identity = run_magick(
+                [
+                    str(source),
+                    "-auto-orient",
+                    "-profile",
+                    working_profile,
+                    "-alpha",
+                    "off",
+                    "-depth",
+                    "16",
+                    "-strip",
+                    "-profile",
+                    working_profile,
+                    "-define",
+                    "tiff:bits-per-sample=16",
+                    "-compress",
+                    "zip",
+                    f"TIFF:{staged}",
+                ],
+                executable=executable,
+            )
+        return _publish_output(staged, target, identity)
 
 
 def make_preview(
@@ -258,24 +299,25 @@ def make_preview(
     max_edge: int = PREVIEW_MAX_EDGE,
     executable: Path = MAGICK,
 ) -> ProcessorResult:
-    with _stable_profile_snapshots(target, {"output": SRGB_PROFILE}) as profiles:
-        output_profile = str(profiles["output"])
-        identity = run_magick(
-            [
-                str(source),
-                "-profile",
-                output_profile,
-                "-resize",
-                f"{max_edge}x{max_edge}>",
-                "-strip",
-                "-profile",
-                output_profile,
-                "-sampling-factor",
-                "4:4:4",
-                "-quality",
-                "92",
-                f"JPEG:{target}",
-            ],
-            executable=executable,
-        )
-        return _bind_output(target, identity)
+    with _private_output_path(target) as staged:
+        with _stable_profile_snapshots(staged, {"output": SRGB_PROFILE}) as profiles:
+            output_profile = str(profiles["output"])
+            identity = run_magick(
+                [
+                    str(source),
+                    "-profile",
+                    output_profile,
+                    "-resize",
+                    f"{max_edge}x{max_edge}>",
+                    "-strip",
+                    "-profile",
+                    output_profile,
+                    "-sampling-factor",
+                    "4:4:4",
+                    "-quality",
+                    "92",
+                    f"JPEG:{staged}",
+                ],
+                executable=executable,
+            )
+        return _publish_output(staged, target, identity)

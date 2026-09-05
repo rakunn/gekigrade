@@ -18,6 +18,8 @@ The working representation is 16-bit integer RGB TIFF tagged with the macOS `ACE
 
 Before normalization, the developed TIFF is copied with exclusive, no-follow semantics into a transient read-only snapshot bound to the recorded RawTherapee output hash. ImageMagick reads only that snapshot, which is revalidated after conversion; the retained developed artifact is independently revalidated as provenance.
 
+ImageMagick never receives the public working-TIFF or preview path as its writable destination. Each invocation writes inside a uniquely created private directory, GekiGrade binds the produced regular file to its hash, then atomically replaces the public job path and verifies the published file against the same hash. A destination symlink raced into place is replaced as a directory entry rather than followed, so it cannot redirect pixel writes into the source photograph.
+
 ## Operation ordering and spaces
 
 1. Orientation and working-profile transform through LittleCMS.

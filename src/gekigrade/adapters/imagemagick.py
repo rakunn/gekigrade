@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TypedDict
 
@@ -43,6 +46,52 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+@contextmanager
+def _stable_profile_snapshots(target: Path, profiles: dict[str, Path]) -> Iterator[dict[str, Path]]:
+    snapshots: dict[str, Path] = {}
+    expected_hashes: dict[str, str] = {}
+    try:
+        for label, profile in profiles.items():
+            if profile.is_symlink() or not profile.is_file():
+                raise ProcessorError(f"{label} color profile is unavailable or unsafe")
+            expected_hash = _sha256(profile)
+            snapshot = target.parent / f".{target.name}.{label}-{expected_hash[:12]}.icc"
+            if snapshot.exists() or snapshot.is_symlink():
+                raise ProcessorError(f"{label} color profile snapshot already exists")
+            with profile.open("rb") as source, snapshot.open("xb") as destination:
+                snapshots[label] = snapshot
+                expected_hashes[label] = expected_hash
+                shutil.copyfileobj(source, destination)
+            if (
+                profile.is_symlink()
+                or _sha256(profile) != expected_hash
+                or _sha256(snapshot) != expected_hash
+            ):
+                raise ProcessorError(f"{label} color profile changed while it was copied")
+        yield snapshots
+        for label, snapshot in snapshots.items():
+            profile = profiles[label]
+            expected_hash = expected_hashes[label]
+            if (
+                snapshot.is_symlink()
+                or not snapshot.is_file()
+                or _sha256(snapshot) != expected_hash
+                or profile.is_symlink()
+                or not profile.is_file()
+                or _sha256(profile) != expected_hash
+            ):
+                raise ProcessorError(f"{label} color profile snapshot changed during processing")
+    except ProcessorError:
+        target.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        target.unlink(missing_ok=True)
+        raise ProcessorError(f"color profile snapshot could not be secured: {exc}") from exc
+    finally:
+        for snapshot in snapshots.values():
+            snapshot.unlink(missing_ok=True)
 
 
 def _magick_identity(executable: Path) -> ProcessorIdentity:
@@ -103,51 +152,57 @@ def run_magick(
 def normalize_jpeg(
     source: Path, target: Path, *, has_profile: bool, executable: Path = MAGICK
 ) -> ProcessorIdentity:
-    arguments = [str(source), "-auto-orient"]
+    required_profiles = {"working": ACESCG_PROFILE}
     if not has_profile:
-        arguments.extend(["-profile", str(SRGB_PROFILE)])
-    arguments.extend(
-        [
-            "-profile",
-            str(ACESCG_PROFILE),
-            "-alpha",
-            "off",
-            "-depth",
-            "16",
-            "-define",
-            "tiff:bits-per-sample=16",
-            "-compress",
-            "zip",
-            f"TIFF:{target}",
-        ]
-    )
-    return run_magick(arguments, executable=executable)
+        required_profiles["assumed-input"] = SRGB_PROFILE
+    with _stable_profile_snapshots(target, required_profiles) as profiles:
+        arguments = [str(source), "-auto-orient"]
+        if not has_profile:
+            arguments.extend(["-profile", str(profiles["assumed-input"])])
+        arguments.extend(
+            [
+                "-profile",
+                str(profiles["working"]),
+                "-alpha",
+                "off",
+                "-depth",
+                "16",
+                "-define",
+                "tiff:bits-per-sample=16",
+                "-compress",
+                "zip",
+                f"TIFF:{target}",
+            ]
+        )
+        return run_magick(arguments, executable=executable)
 
 
 def normalize_profiled_tiff(
     source: Path, target: Path, *, executable: Path = MAGICK
 ) -> ProcessorIdentity:
-    return run_magick(
-        [
-            str(source),
-            "-auto-orient",
-            "-profile",
-            str(ACESCG_PROFILE),
-            "-alpha",
-            "off",
-            "-depth",
-            "16",
-            "-strip",
-            "-profile",
-            str(ACESCG_PROFILE),
-            "-define",
-            "tiff:bits-per-sample=16",
-            "-compress",
-            "zip",
-            f"TIFF:{target}",
-        ],
-        executable=executable,
-    )
+    with _stable_profile_snapshots(target, {"working": ACESCG_PROFILE}) as profiles:
+        working_profile = str(profiles["working"])
+        return run_magick(
+            [
+                str(source),
+                "-auto-orient",
+                "-profile",
+                working_profile,
+                "-alpha",
+                "off",
+                "-depth",
+                "16",
+                "-strip",
+                "-profile",
+                working_profile,
+                "-define",
+                "tiff:bits-per-sample=16",
+                "-compress",
+                "zip",
+                f"TIFF:{target}",
+            ],
+            executable=executable,
+        )
 
 
 def make_preview(
@@ -157,21 +212,23 @@ def make_preview(
     max_edge: int = PREVIEW_MAX_EDGE,
     executable: Path = MAGICK,
 ) -> ProcessorIdentity:
-    return run_magick(
-        [
-            str(source),
-            "-profile",
-            str(SRGB_PROFILE),
-            "-resize",
-            f"{max_edge}x{max_edge}>",
-            "-strip",
-            "-profile",
-            str(SRGB_PROFILE),
-            "-sampling-factor",
-            "4:4:4",
-            "-quality",
-            "92",
-            f"JPEG:{target}",
-        ],
-        executable=executable,
-    )
+    with _stable_profile_snapshots(target, {"output": SRGB_PROFILE}) as profiles:
+        output_profile = str(profiles["output"])
+        return run_magick(
+            [
+                str(source),
+                "-profile",
+                output_profile,
+                "-resize",
+                f"{max_edge}x{max_edge}>",
+                "-strip",
+                "-profile",
+                output_profile,
+                "-sampling-factor",
+                "4:4:4",
+                "-quality",
+                "92",
+                f"JPEG:{target}",
+            ],
+            executable=executable,
+        )

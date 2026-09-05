@@ -66,6 +66,7 @@ uv run geki prepare /path/to/photo.ARW --output work/photo-raw
 - The initial looks are restrained engineering defaults. Their photographic quality has not been established on real user photographs.
 - Pixel identity is guaranteed only for an identical tool, profile, configuration, architecture, and thread fingerprint. Cross-platform conformance uses a documented tolerance.
 - One Sony ILCE-7RM5/FE 24–70mm F2.8 GM II file is confirmed compatible. Its bundled Lensfun entry contains distortion but not vignetting calibration, and RawTherapee does not report actual application. GekiGrade records requested, supported, and confirmed states separately.
+- RAW EXIF orientations 1, 6, and 8 are accepted. Mirrored orientations and 180-degree orientation 3 are rejected until the pipeline can verify the complete pixel transform rather than infer it from dimensions.
 - General RAW quality, paired camera-JPEG fidelity, perspective correction, semantic masking, publishing, API orchestration, and desktop UI remain unproven or deferred.
 
 See [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) for selection and licensing details and [`docs/RAW_MANUAL_TEST.md`](docs/RAW_MANUAL_TEST.md) for the executed ARW compatibility procedure and remaining visual checks.

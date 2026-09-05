@@ -197,6 +197,11 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
         raise ValueError("ARW dimensions exceed the 200 megapixel safety limit")
     if orientation not in range(1, 9):
         raise ValueError("ARW EXIF orientation is outside the supported range")
+    if orientation not in {1, 6, 8}:
+        raise ValueError(
+            f"RAW EXIF orientation {orientation} is not yet supported safely; "
+            "only normal and 90-degree rotations are accepted"
+        )
     oriented_width, oriented_height = (
         (height, width) if orientation in {5, 6, 7, 8} else (width, height)
     )

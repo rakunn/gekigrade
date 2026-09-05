@@ -365,6 +365,22 @@ def test_prepare_rejects_unrotated_raw_output_for_rotated_exif_orientation(
     assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
+@pytest.mark.parametrize("orientation", [2, 3, 4, 5, 7])
+def test_prepare_rejects_raw_orientations_without_a_fully_verifiable_transform(
+    tmp_path: Path, orientation: int
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path, orientation=orientation)
+
+    with pytest.raises(ValueError, match=f"RAW EXIF orientation {orientation} is not"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job").exists()
+
+
 def test_prepare_rejects_a_raw_source_changed_after_inspection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

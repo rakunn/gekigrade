@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from gekigrade.adapters.imagemagick import ProcessorError, preview_dimensions, run_magick
+from gekigrade.adapters.imagemagick import (
+    ProcessorError,
+    ProcessorIdentity,
+    normalize_profiled_tiff,
+    preview_dimensions,
+    run_magick,
+)
+from gekigrade.doctor import ACESCG_PROFILE
 
 
 def _write_executable(path: Path, source: str) -> Path:
@@ -65,3 +72,71 @@ exit 0
 
     with pytest.raises(ProcessorError, match="changed during processing"):
         run_magick(["input.tif", "output.tif"], executable=executable)
+
+
+def test_normalize_profiled_tiff_uses_one_stable_private_acescg_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "developed.tif"
+    source.write_bytes(b"test input")
+    target = tmp_path / "working.tif"
+    captured_snapshot: Path | None = None
+
+    def inspect_invocation(
+        arguments: list[str], *, executable: Path, timeout_seconds: float = 120.0
+    ) -> ProcessorIdentity:
+        nonlocal captured_snapshot
+        del executable, timeout_seconds
+        profile_paths = [
+            Path(arguments[index + 1])
+            for index, value in enumerate(arguments)
+            if value == "-profile"
+        ]
+        assert len(profile_paths) == 2
+        assert profile_paths[0] == profile_paths[1]
+        captured_snapshot = profile_paths[0]
+        assert captured_snapshot != ACESCG_PROFILE
+        assert captured_snapshot.read_bytes() == ACESCG_PROFILE.read_bytes()
+        target.write_bytes(b"normalized")
+        return {
+            "name": "ImageMagick",
+            "path": "/test/magick",
+            "version": "test",
+            "executable_sha256": "a" * 64,
+        }
+
+    monkeypatch.setattr("gekigrade.adapters.imagemagick.run_magick", inspect_invocation)
+
+    normalize_profiled_tiff(source, target, executable=tmp_path / "magick")
+
+    assert captured_snapshot is not None
+    assert not captured_snapshot.exists()
+
+
+def test_normalize_profiled_tiff_rejects_a_changed_profile_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "developed.tif"
+    source.write_bytes(b"test input")
+    target = tmp_path / "working.tif"
+
+    def change_snapshot(
+        arguments: list[str], *, executable: Path, timeout_seconds: float = 120.0
+    ) -> ProcessorIdentity:
+        del executable, timeout_seconds
+        snapshot = Path(arguments[arguments.index("-profile") + 1])
+        assert snapshot != ACESCG_PROFILE
+        snapshot.write_bytes(b"changed")
+        target.write_bytes(b"invalid normalized output")
+        return {
+            "name": "ImageMagick",
+            "path": "/test/magick",
+            "version": "test",
+            "executable_sha256": "a" * 64,
+        }
+
+    monkeypatch.setattr("gekigrade.adapters.imagemagick.run_magick", change_snapshot)
+
+    with pytest.raises(ProcessorError, match="profile snapshot changed"):
+        normalize_profiled_tiff(source, target, executable=tmp_path / "magick")
+    assert not target.exists()

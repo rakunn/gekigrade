@@ -288,6 +288,10 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     assert normalization_tool["executable_sha256"] == _sha256(
         Path("/opt/homebrew/bin/magick").resolve()
     )
+    assert metadata["prepared_artifacts"] == {
+        "working_tiff_sha256": _sha256(job / "intermediate/working.tif"),
+        "preview_jpeg_sha256": _sha256(job / "preview.jpg"),
+    }
     development = metadata["raw_development"]
     assert development["engine"] == "RawTherapee"
     assert development["profile_sha256"] == _sha256(DEFAULT_RAW_PROFILE)
@@ -326,6 +330,14 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     assert manifest["artifacts"]["intermediate/rawtherapee/run.json"]["sha256"]
     assert manifest["artifacts"]["intermediate/rawtherapee/development.pp3"]["sha256"]
     assert manifest["executed_tools"] == metadata["processing_tools"]
+    assert (
+        manifest["artifacts"]["intermediate/working.tif"]["sha256"]
+        == metadata["prepared_artifacts"]["working_tiff_sha256"]
+    )
+    assert (
+        manifest["artifacts"]["preview.jpg"]["sha256"]
+        == metadata["prepared_artifacts"]["preview_jpeg_sha256"]
+    )
 
 
 def test_prepare_does_not_expose_a_raw_profile_override() -> None:
@@ -517,6 +529,62 @@ def test_prepare_rejects_an_invalid_normalized_raw_working_tiff(
             rawtherapee_executable=rawtherapee,
         )
     assert not (tmp_path / "raw-job/intermediate/working.tif").exists()
+
+
+def test_prepare_rejects_a_working_tiff_changed_during_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+
+    def make_preview_then_change_working(
+        working: Path, preview: Path, *, executable: Path
+    ) -> ProcessorIdentity:
+        identity = real_make_preview(working, preview, executable=executable)
+        with working.open("ab") as stream:
+            stream.write(b"changed during preview")
+        return identity
+
+    monkeypatch.setattr(prepare_module, "make_preview", make_preview_then_change_working)
+
+    with pytest.raises(RuntimeError, match="working TIFF changed during preview generation"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/preview.jpg").exists()
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+def test_prepare_rejects_a_preview_without_the_expected_srgb_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+
+    def write_untagged_preview(
+        working: Path, preview: Path, *, executable: Path
+    ) -> ProcessorIdentity:
+        del working, executable
+        Image.new("RGB", (180, 120), (32, 64, 96)).save(preview, format="JPEG")
+        return {
+            "name": "ImageMagick",
+            "path": "/test/magick",
+            "version": "test",
+            "executable_sha256": "a" * 64,
+        }
+
+    monkeypatch.setattr(prepare_module, "make_preview", write_untagged_preview)
+
+    with pytest.raises(RuntimeError, match="preview JPEG must embed the expected sRGB profile"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/preview.jpg").exists()
+    assert not (tmp_path / "raw-job/manifest.json").exists()
 
 
 def test_inspect_rejects_a_raw_source_changed_during_metadata_read(tmp_path: Path) -> None:

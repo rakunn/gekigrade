@@ -16,7 +16,7 @@ Use oriented, profile-tagged 16-bit TIFF for Milestone 1. It provides inspectabl
 
 Use macOS `ACESCG Linear.icc` at the LittleCMS boundary and the pinned OCIO ACES 2.0 CG configuration internally. Record the system profile hash and treat a changed hash as a different rendering fingerprint. This is a local macOS decision, not a cross-platform guarantee.
 
-Normalization and preview encoding resolve and invoke one explicit ImageMagick executable. Each operation brackets execution with its path, version, and binary SHA-256 fingerprint; `source.json` and the prepared manifest retain those actual producer identities separately from the environment snapshot reported by `geki doctor`. Doctor tests the same fixed ExifTool and ImageMagick paths used by default preparation rather than substituting a different executable found on `PATH`.
+Normalization and preview encoding resolve and invoke one explicit ImageMagick executable. Each operation brackets execution with its path, version, and binary SHA-256 fingerprint; `source.json` and the prepared manifest retain those actual producer identities separately from the environment snapshot reported by `geki doctor`. The validated working-TIFF hash is held constant across preview generation and manifest publication. Preview pixels are accepted only from a hash-stable, three-channel JPEG carrying the expected sRGB profile, and its hash is also held constant through manifest publication. Doctor tests the same fixed ExifTool and ImageMagick paths used by default preparation rather than substituting a different executable found on `PATH`.
 
 ## ADR-005 — OpenImageIO and OpenColorIO Python wheels
 

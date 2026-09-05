@@ -289,9 +289,40 @@ def _validate_working_tiff(path: Path) -> dict[str, int]:
     return dimensions
 
 
-def _load_srgb(path: Path) -> np.ndarray[Any, np.dtype[np.float32]]:
-    with Image.open(path) as image:
-        return np.asarray(image.convert("RGB"), dtype=np.float32) / np.float32(255.0)
+def _load_validated_srgb(
+    path: Path,
+) -> tuple[np.ndarray[Any, np.dtype[np.float32]], str]:
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError("preview must be a regular, non-symlink JPEG")
+    before = sha256_file(path)
+    try:
+        with Image.open(path) as image:
+            if image.format != "JPEG":
+                raise OSError("decoded preview is not a JPEG")
+            if image.mode != "RGB" or image.getbands() != ("R", "G", "B"):
+                raise OSError("decoded preview is not three-channel RGB")
+            profile = image.info.get("icc_profile")
+            image.load()
+            pixels = np.asarray(image, dtype=np.float32) / np.float32(255.0)
+    except (OSError, SyntaxError, UnidentifiedImageError) as exc:
+        path.unlink(missing_ok=True)
+        raise RuntimeError(f"preview JPEG cannot be decoded safely: {exc}") from exc
+    if not isinstance(profile, bytes) or hashlib.sha256(profile).hexdigest() != sha256_file(
+        SRGB_PROFILE
+    ):
+        path.unlink(missing_ok=True)
+        raise RuntimeError("preview JPEG must embed the expected sRGB profile")
+    if path.is_symlink() or not path.is_file() or sha256_file(path) != before:
+        path.unlink(missing_ok=True)
+        raise RuntimeError("preview JPEG changed during validation and pixel loading")
+    return pixels, before
+
+
+def _artifact_matches(path: Path, expected_sha256: str) -> bool:
+    try:
+        return not path.is_symlink() and path.is_file() and sha256_file(path) == expected_sha256
+    except OSError:
+        return False
 
 
 def _contact_sheet(preview_path: Path, candidates: list[dict[str, Any]], target: Path) -> None:
@@ -482,14 +513,24 @@ def prepare_job(
             "lens_correction": lens_correction,
         }
     working_dimensions = _validate_working_tiff(working)
+    working_sha256 = sha256_file(working)
     if source_format == "ARW":
         source["oriented_dimensions"] = working_dimensions
+    if not _artifact_matches(working, working_sha256):
+        raise RuntimeError("working TIFF changed before preview generation")
     preview_tool = make_preview(working, preview, executable=imagemagick_executable)
+    if not _artifact_matches(working, working_sha256):
+        preview.unlink(missing_ok=True)
+        raise RuntimeError("working TIFF changed during preview generation")
     source["processing_tools"] = {
         "normalization": normalization_tool,
         "preview": preview_tool,
     }
-    pixels = _load_srgb(preview)
+    pixels, preview_sha256 = _load_validated_srgb(preview)
+    source["prepared_artifacts"] = {
+        "working_tiff_sha256": working_sha256,
+        "preview_jpeg_sha256": preview_sha256,
+    }
     analysis = analyze_srgb(pixels)
     analysis["dimensions"] = {"width": pixels.shape[1], "height": pixels.shape[0]}
     analysis["aspect_ratio"] = pixels.shape[1] / pixels.shape[0]
@@ -503,10 +544,23 @@ def prepare_job(
     write_json(job / "plans/example-plan.json", _example_plan(source["source_sha256"]))
     write_json(job / "looks.json", {"schema_version": "1.0.0", "looks": looks_as_json()})
     write_json(job / "edit-plan.schema.json", EditPlan.model_json_schema())
+    if not _artifact_matches(working, working_sha256) or not _artifact_matches(
+        preview, preview_sha256
+    ):
+        raise RuntimeError(
+            "prepared working or preview artifact changed before manifest publication"
+        )
     if source_format == "ARW" and sha256_file(source_path) != source["source_sha256"]:
         raise RawTherapeeError("source RAW changed during job preparation")
     manifest_path = job / "manifest.json"
     write_json(manifest_path, _artifact_manifest(job, source))
+    if not _artifact_matches(working, working_sha256) or not _artifact_matches(
+        preview, preview_sha256
+    ):
+        manifest_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            "prepared working or preview artifact changed during manifest publication"
+        )
     if source_format == "ARW" and sha256_file(source_path) != source["source_sha256"]:
         manifest_path.unlink(missing_ok=True)
         raise RawTherapeeError("source RAW changed while publishing the job manifest")

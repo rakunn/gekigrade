@@ -13,6 +13,7 @@ from PIL import Image
 from gekigrade.adapters.rawtherapee import (
     RawTherapeeError,
     develop_raw,
+    inspect_camera_input_profile,
     inspect_lensfun_support,
 )
 
@@ -238,6 +239,29 @@ shutil.copyfile(pathlib.Path(args[-1]), pathlib.Path(args[args.index("-o") + 1])
         )
 
     assert not target.exists()
+
+
+def test_camera_input_profile_records_matrix_fallback_resources(tmp_path: Path) -> None:
+    executable = _write_rawtherapee_app(tmp_path, "5.13", "#!/bin/sh\nexit 0\n")
+    resources = executable.parent.parent / "Resources/share"
+    dcp_directory = resources / "dcpprofiles"
+    dcp_directory.mkdir(parents=True)
+    aliases = dcp_directory / "camera_model_aliases.json"
+    aliases.write_text("{}\n", encoding="utf-8")
+    (resources / "iccprofiles/input").mkdir(parents=True)
+    camera_constants = resources / "camconst.json"
+    camera_constants.write_text('{"camera_constants": []}\n', encoding="utf-8")
+
+    result = inspect_camera_input_profile(
+        {"Make": "SONY", "Model": "ILCE-7RM5"}, executable=executable
+    )
+
+    assert result["profile_key"] == "SONY ILCE-7RM5"
+    assert result["resolved_kind"] == "camera-matrix"
+    assert result["profile_path"] is None
+    assert result["profile_sha256"] is None
+    assert result["aliases_sha256"] == _sha256(aliases)
+    assert result["camera_constants_sha256"] == _sha256(camera_constants)
 
 
 def test_lensfun_support_reports_matches_without_claiming_application(tmp_path: Path) -> None:

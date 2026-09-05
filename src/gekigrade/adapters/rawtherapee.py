@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import plistlib
 import re
@@ -43,6 +44,19 @@ class LensfunSupport(TypedDict):
     limitation: str
 
 
+class CameraInputProfile(TypedDict):
+    selection: str
+    camera_make_model: str
+    profile_key: str
+    resolved_kind: str
+    profile_path: str | None
+    profile_sha256: str | None
+    aliases_path: str
+    aliases_sha256: str
+    camera_constants_path: str
+    camera_constants_sha256: str
+
+
 @dataclass(frozen=True)
 class RawDevelopmentResult:
     output_path: Path
@@ -75,6 +89,70 @@ def _tool_version(executable: Path) -> str | None:
 
 def _normalized_equipment_name(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).casefold())
+
+
+def _find_profile(directory: Path, profile_key: str, suffixes: set[str]) -> Path | None:
+    matches = sorted(
+        path
+        for path in directory.iterdir()
+        if path.is_file()
+        and not path.is_symlink()
+        and path.suffix.casefold() in suffixes
+        and path.stem.casefold() == profile_key.casefold()
+    )
+    if len(matches) > 1:
+        raise RawTherapeeError(f"multiple camera input profiles match {profile_key}")
+    return matches[0] if matches else None
+
+
+def inspect_camera_input_profile(
+    metadata: dict[str, object], *, executable: Path = RAWTHERAPEE_CLI
+) -> CameraInputProfile:
+    camera_make_model = f"{metadata.get('Make', '')} {metadata.get('Model', '')}".strip()
+    if not camera_make_model:
+        raise RawTherapeeError("camera make and model are required to resolve the input profile")
+    resources = executable.resolve(strict=True).parent.parent / "Resources/share"
+    dcp_directory = resources / "dcpprofiles"
+    icc_directory = resources / "iccprofiles/input"
+    aliases_path = dcp_directory / "camera_model_aliases.json"
+    camera_constants_path = resources / "camconst.json"
+    for path in (aliases_path, camera_constants_path):
+        if path.is_symlink() or not path.is_file():
+            raise RawTherapeeError(f"RawTherapee camera resource is unavailable: {path}")
+    if not dcp_directory.is_dir() or not icc_directory.is_dir():
+        raise RawTherapeeError("RawTherapee camera profile directories are unavailable")
+    try:
+        aliases = json.loads(aliases_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RawTherapeeError(f"RawTherapee camera aliases cannot be parsed: {exc}") from exc
+    if not isinstance(aliases, dict):
+        raise RawTherapeeError("RawTherapee camera aliases must be a JSON object")
+    profile_key = camera_make_model
+    wanted = camera_make_model.casefold()
+    for canonical, alias_values in aliases.items():
+        if not isinstance(canonical, str) or not isinstance(alias_values, list):
+            raise RawTherapeeError("RawTherapee camera aliases contain an invalid entry")
+        candidates = [canonical, *(value for value in alias_values if isinstance(value, str))]
+        if any(candidate.casefold() == wanted for candidate in candidates):
+            profile_key = canonical
+            break
+    profile_path = _find_profile(dcp_directory, profile_key, {".dcp"})
+    resolved_kind = "dcp"
+    if profile_path is None:
+        profile_path = _find_profile(icc_directory, profile_key, {".icc", ".icm"})
+        resolved_kind = "icc" if profile_path is not None else "camera-matrix"
+    return {
+        "selection": "auto-matched-camera-profile",
+        "camera_make_model": camera_make_model,
+        "profile_key": profile_key,
+        "resolved_kind": resolved_kind,
+        "profile_path": str(profile_path) if profile_path is not None else None,
+        "profile_sha256": _sha256(profile_path) if profile_path is not None else None,
+        "aliases_path": str(aliases_path),
+        "aliases_sha256": _sha256(aliases_path),
+        "camera_constants_path": str(camera_constants_path),
+        "camera_constants_sha256": _sha256(camera_constants_path),
+    }
 
 
 def inspect_lensfun_support(

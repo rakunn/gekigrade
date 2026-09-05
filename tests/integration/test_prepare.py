@@ -16,7 +16,7 @@ from gekigrade.adapters.imagemagick import make_preview as real_make_preview
 from gekigrade.adapters.rawtherapee import RawTherapeeError
 from gekigrade.domain.models import EditPlan
 from gekigrade.domain.paths import create_job_directory as real_create_job_directory
-from gekigrade.pipeline.prepare import prepare_job
+from gekigrade.pipeline.prepare import inspect_photo, prepare_job
 
 
 def _sha256(path: Path) -> str:
@@ -35,6 +35,13 @@ def _write_rawtherapee_app(root: Path, source: str) -> Path:
     (executable.parent.parent / "Info.plist").write_bytes(
         plistlib.dumps({"CFBundleShortVersionString": "5.13"})
     )
+    resources = executable.parent.parent / "Resources/share"
+    dcp_directory = resources / "dcpprofiles"
+    dcp_directory.mkdir(parents=True)
+    (dcp_directory / "camera_model_aliases.json").write_text("{}\n", encoding="utf-8")
+    (dcp_directory / "SONY ILCE-TEST.dcp").write_bytes(b"synthetic-test-dcp")
+    (resources / "iccprofiles/input").mkdir(parents=True)
+    (resources / "camconst.json").write_text('{"camera_constants": []}\n', encoding="utf-8")
     return executable
 
 
@@ -219,6 +226,16 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     development = metadata["raw_development"]
     assert development["engine"] == "RawTherapee"
     assert development["profile_sha256"] == _sha256(profile)
+    camera_input = development["camera_input_profile"]
+    expected_dcp = rawtherapee.parent.parent / "Resources/share/dcpprofiles/SONY ILCE-TEST.dcp"
+    assert camera_input["selection"] == "auto-matched-camera-profile"
+    assert camera_input["profile_key"] == "SONY ILCE-TEST"
+    assert camera_input["resolved_kind"] == "dcp"
+    assert camera_input["profile_path"] == str(expected_dcp)
+    assert camera_input["profile_sha256"] == _sha256(expected_dcp)
+    assert camera_input["camera_constants_sha256"] == _sha256(
+        rawtherapee.parent.parent / "Resources/share/camconst.json"
+    )
     assert development["intermediate_profile"]["embedded"] is True
     assert (
         development["intermediate_profile"]["sha256"]
@@ -283,3 +300,33 @@ def test_prepare_rechecks_the_raw_source_before_success(
             raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
             lensfun_database=lensfun,
         )
+
+
+def test_inspect_rejects_a_raw_source_changed_during_metadata_read(tmp_path: Path) -> None:
+    source, _, _, _, _ = _raw_test_dependencies(tmp_path)
+    exiftool = _write_executable(
+        tmp_path / "mutating-exiftool",
+        """#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[-1])
+metadata = {
+    "SourceFile": str(path),
+    "FileType": "ARW",
+    "MIMEType": "image/x-sony-arw",
+    "ImageWidth": 180,
+    "ImageHeight": 120,
+    "Orientation": 1,
+    "Make": "SONY",
+    "Model": "ILCE-TEST"
+}
+with path.open("ab") as stream:
+    stream.write(b"changed-during-exiftool")
+print(json.dumps([metadata]))
+""",
+    )
+
+    with pytest.raises(ValueError, match="changed during metadata inspection"):
+        inspect_photo(source, exiftool_executable=exiftool)

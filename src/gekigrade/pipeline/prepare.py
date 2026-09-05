@@ -17,6 +17,7 @@ from gekigrade.adapters.rawtherapee import (
     RAWTHERAPEE_OUTPUT_PROFILE,
     RawTherapeeError,
     develop_raw,
+    inspect_camera_input_profile,
     inspect_lensfun_support,
 )
 from gekigrade.analysis.metrics import analyze_srgb
@@ -134,7 +135,10 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
     with path.open("rb") as stream:
         if stream.read(4) not in {b"II*\x00", b"MM\x00*"}:
             raise ValueError("source does not have a TIFF-based RAW signature")
+    source_sha256 = sha256_file(path)
     metadata = _read_exiftool(path, executable=exiftool_executable)
+    if sha256_file(path) != source_sha256:
+        raise ValueError("source ARW changed during metadata inspection")
     if metadata.get("FileType") != "ARW" or metadata.get("MIMEType") != "image/x-sony-arw":
         raise ValueError("source metadata does not identify a Sony ARW")
     try:
@@ -163,7 +167,7 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
     return {
         "schema_version": "1.0.0",
         "source_path": str(path.resolve()),
-        "source_sha256": sha256_file(path),
+        "source_sha256": source_sha256,
         "format": "ARW",
         "stored_dimensions": {"width": width, "height": height},
         "oriented_dimensions": {"width": oriented_width, "height": oriented_height},
@@ -317,6 +321,9 @@ def prepare_job(
     else:
         raw_work = job / "intermediate/rawtherapee"
         developed = raw_work / "developed.tif"
+        camera_input_profile = inspect_camera_input_profile(
+            source["capture_metadata"], executable=rawtherapee_executable
+        )
         result = develop_raw(
             source_path,
             developed,
@@ -326,6 +333,13 @@ def prepare_job(
         )
         if result.source_sha256 != source["source_sha256"]:
             raise RawTherapeeError("source RAW changed after inspection")
+        if (
+            inspect_camera_input_profile(
+                source["capture_metadata"], executable=rawtherapee_executable
+            )
+            != camera_input_profile
+        ):
+            raise RawTherapeeError("RawTherapee camera input resources changed during development")
         intermediate_profile = _embedded_profile(developed)
         if not raw_output_profile.is_file():
             raise RuntimeError("expected RawTherapee output ICC profile is unavailable")
@@ -342,6 +356,7 @@ def prepare_job(
             "engine": "RawTherapee",
             "profile_path": str(result.profile_path.relative_to(job)),
             "profile_sha256": result.profile_sha256,
+            "camera_input_profile": camera_input_profile,
             "run_report_path": str(result.report_path.relative_to(job)),
             "developed_tiff_sha256": result.output_sha256,
             "intermediate_profile": intermediate_profile,

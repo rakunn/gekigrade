@@ -40,7 +40,9 @@ class LensfunSupport(TypedDict):
     database_sha256: str | None
     database_files: list[FingerprintedFile]
     camera_match: bool
+    camera_mounts: list[str]
     lens_match: bool
+    lens_mounts: list[str]
     requested: list[str]
     supported: list[str]
     all_requested_supported: bool
@@ -324,7 +326,9 @@ def inspect_lensfun_support(
         "database_sha256": database_status["sha256"],
         "database_files": database_status["files"],
         "camera_match": False,
+        "camera_mounts": [],
         "lens_match": False,
+        "lens_mounts": [],
         "requested": ["distortion", "vignetting"],
         "supported": [],
         "all_requested_supported": False,
@@ -341,33 +345,54 @@ def inspect_lensfun_support(
     wanted_make = _normalized_equipment_name(metadata.get("Make", ""))
     wanted_camera = _normalized_equipment_name(metadata.get("Model", ""))
     wanted_lens = _normalized_equipment_name(metadata.get("LensModel", ""))
-    for item in database_status["files"]:
-        root = ET.parse(item["path"]).getroot()
-        if not base["camera_match"]:
-            for camera in root.findall("camera"):
-                make = _normalized_equipment_name(camera.findtext("maker", ""))
-                model = _normalized_equipment_name(camera.findtext("model", ""))
-                if wanted_make == make and wanted_camera == model:
-                    base["camera_match"] = True
-                    break
-        if not base["lens_match"]:
-            for lens in root.findall("lens"):
-                model = _normalized_equipment_name(lens.findtext("model", ""))
-                if wanted_lens and wanted_lens == model:
-                    base["lens_match"] = True
-                    calibration = lens.find("calibration")
-                    if calibration is not None:
-                        base["supported"] = sorted(
-                            {
-                                child.tag
-                                for child in calibration
-                                if child.tag in {"distortion", "vignetting"}
-                            }
-                        )
-                    base["all_requested_supported"] = set(base["requested"]).issubset(
-                        base["supported"]
+    roots = [ET.parse(item["path"]).getroot() for item in database_status["files"]]
+    camera_mounts: set[str] = set()
+    for root in roots:
+        for camera in root.findall("camera"):
+            make = _normalized_equipment_name(camera.findtext("maker", ""))
+            model = _normalized_equipment_name(camera.findtext("model", ""))
+            if wanted_make == make and wanted_camera == model:
+                base["camera_match"] = True
+                camera_mounts.update(
+                    mount.text.strip()
+                    for mount in camera.findall("mount")
+                    if mount.text and mount.text.strip()
+                )
+    base["camera_mounts"] = sorted(camera_mounts)
+    normalized_camera_mounts = {
+        _normalized_equipment_name(mount) for mount in base["camera_mounts"]
+    }
+    if not normalized_camera_mounts:
+        return base
+    for root in roots:
+        for lens in root.findall("lens"):
+            model = _normalized_equipment_name(lens.findtext("model", ""))
+            lens_mounts = sorted(
+                {
+                    mount.text.strip()
+                    for mount in lens.findall("mount")
+                    if mount.text and mount.text.strip()
+                }
+            )
+            normalized_lens_mounts = {_normalized_equipment_name(mount) for mount in lens_mounts}
+            if (
+                wanted_lens
+                and wanted_lens == model
+                and normalized_camera_mounts.intersection(normalized_lens_mounts)
+            ):
+                base["lens_match"] = True
+                base["lens_mounts"] = lens_mounts
+                calibration = lens.find("calibration")
+                if calibration is not None:
+                    base["supported"] = sorted(
+                        {
+                            child.tag
+                            for child in calibration
+                            if child.tag in {"distortion", "vignetting"}
+                        }
                     )
-                    break
+                base["all_requested_supported"] = set(base["requested"]).issubset(base["supported"])
+                return base
     return base
 
 

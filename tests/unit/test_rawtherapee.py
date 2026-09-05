@@ -303,6 +303,18 @@ def test_camera_input_profile_records_matrix_fallback_resources(tmp_path: Path) 
 def test_lensfun_support_reports_matches_without_claiming_application(tmp_path: Path) -> None:
     database = tmp_path / "lensfun"
     database.mkdir()
+    wrong_mount_database = database / "mil-canon.xml"
+    wrong_mount_database.write_text(
+        """<lensdatabase>
+<lens><maker>Sigma</maker><model>24-70mm F2.8 DG DN II Art</model><mount>Canon RF</mount>
+<calibration>
+<vignetting model="pa" focal="24" aperture="2.8" distance="10" k1="0" k2="0" k3="0"/>
+</calibration>
+</lens>
+</lensdatabase>
+""",
+        encoding="utf-8",
+    )
     camera_database = database / "mil-sony.xml"
     camera_database.write_text(
         """<lensdatabase>
@@ -333,15 +345,19 @@ def test_lensfun_support_reports_matches_without_claiming_application(tmp_path: 
 
     assert result["database_sha256"]
     assert {Path(item["path"]).name for item in result["database_files"]} == {
+        "mil-canon.xml",
         "mil-sony.xml",
         "mil-sigma.xml",
     }
     assert {item["sha256"] for item in result["database_files"]} == {
+        _sha256(wrong_mount_database),
         _sha256(camera_database),
         _sha256(lens_database),
     }
     assert result["camera_match"] is True
+    assert result["camera_mounts"] == ["Sony E"]
     assert result["lens_match"] is True
+    assert result["lens_mounts"] == ["Sony E"]
     assert result["requested"] == ["distortion", "vignetting"]
     assert result["supported"] == ["distortion"]
     assert result["all_requested_supported"] is False

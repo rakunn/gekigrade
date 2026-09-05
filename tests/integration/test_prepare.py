@@ -116,8 +116,8 @@ print("fake ARW developed")
     lensfun.mkdir()
     (lensfun / "mil-sony.xml").write_text(
         """<lensdatabase>
-<camera><maker>SONY</maker><model>ILCE-TEST</model></camera>
-<lens><maker>Sony</maker><model>FE TEST</model></lens>
+<camera><maker>SONY</maker><model>ILCE-TEST</model><mount>Sony E</mount></camera>
+<lens><maker>Sony</maker><model>FE TEST</model><mount>Sony E</mount></lens>
 </lensdatabase>
 """,
         encoding="utf-8",

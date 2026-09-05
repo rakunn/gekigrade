@@ -27,6 +27,8 @@ from gekigrade.adapters.tools import ExternalTool, ToolStatus, inspect_tool
 
 ACESCG_PROFILE = Path("/System/Library/ColorSync/Profiles/ACESCG Linear.icc")
 SRGB_PROFILE = Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc")
+EXIFTOOL_CLI = Path("/opt/homebrew/bin/exiftool")
+IMAGEMAGICK_CLI = Path("/opt/homebrew/bin/magick")
 RAWTHERAPEE_CLI = Path("/Applications/RawTherapee.app/Contents/MacOS/rawtherapee-cli")
 RAWTHERAPEE_PLIST = Path("/Applications/RawTherapee.app/Contents/Info.plist")
 
@@ -131,7 +133,7 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
         "exiftool": inspect_tool(
             ExternalTool(
                 name="exiftool",
-                candidates=("exiftool", "/opt/homebrew/bin/exiftool"),
+                candidates=(str(EXIFTOOL_CLI),),
                 version_args=("-ver",),
                 install_hint="Install with: brew install exiftool",
             )
@@ -139,7 +141,7 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
         "imagemagick": inspect_tool(
             ExternalTool(
                 name="imagemagick",
-                candidates=("magick", "/opt/homebrew/bin/magick"),
+                candidates=(str(IMAGEMAGICK_CLI),),
                 version_args=("-version",),
                 install_hint="Install with: brew install imagemagick",
             )

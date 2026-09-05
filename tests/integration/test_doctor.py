@@ -78,6 +78,22 @@ def test_doctor_reports_malformed_rawtherapee_metadata_as_not_ready(
     assert report["raw_status"] == "not-ready"
 
 
+def test_doctor_does_not_substitute_path_tools_for_prepare_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(doctor_module, "EXIFTOOL_CLI", tmp_path / "missing-exiftool", raising=False)
+    monkeypatch.setattr(
+        doctor_module, "IMAGEMAGICK_CLI", tmp_path / "missing-magick", raising=False
+    )
+
+    report = build_doctor_report(run_color_probe=False)
+
+    assert report["tools"]["exiftool"]["available"] is False
+    assert report["tools"]["imagemagick"]["available"] is False
+    assert report["ready_for_jpeg"] is False
+    assert report["ready_for_raw"] is False
+
+
 def test_doctor_requires_parseable_camera_resources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

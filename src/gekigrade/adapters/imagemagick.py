@@ -5,9 +5,9 @@ import subprocess
 from pathlib import Path
 from typing import TypedDict
 
-from gekigrade.doctor import ACESCG_PROFILE, SRGB_PROFILE
+from gekigrade.doctor import ACESCG_PROFILE, IMAGEMAGICK_CLI, SRGB_PROFILE
 
-MAGICK = Path("/opt/homebrew/bin/magick")
+MAGICK = IMAGEMAGICK_CLI
 
 
 class ProcessorError(RuntimeError):

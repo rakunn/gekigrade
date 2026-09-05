@@ -26,7 +26,13 @@ from gekigrade.adapters.rawtherapee import (
     rawtherapee_output_profile_for_executable,
 )
 from gekigrade.analysis.metrics import analyze_srgb
-from gekigrade.doctor import ACESCG_PROFILE, SRGB_PROFILE, build_doctor_report, sha256_file
+from gekigrade.doctor import (
+    ACESCG_PROFILE,
+    EXIFTOOL_CLI,
+    SRGB_PROFILE,
+    build_doctor_report,
+    sha256_file,
+)
 from gekigrade.domain.jsonio import write_json
 from gekigrade.domain.models import EditPlan
 from gekigrade.domain.paths import create_job_directory
@@ -35,7 +41,7 @@ from gekigrade.grading.looks import looks_as_json
 
 MAX_SOURCE_BYTES = 1024 * 1024 * 1024
 MAX_PIXEL_COUNT = 200_000_000
-EXIFTOOL = Path("/opt/homebrew/bin/exiftool")
+EXIFTOOL = EXIFTOOL_CLI
 
 
 def _inspect_jpeg(
@@ -138,6 +144,7 @@ def _read_exiftool(
             "-Orientation",
             "-Make",
             "-Model",
+            "-LensMake",
             "-LensModel",
             "-ExposureTime",
             "-FNumber",
@@ -194,6 +201,7 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
     capture_keys = (
         "Make",
         "Model",
+        "LensMake",
         "LensModel",
         "ExposureTime",
         "FNumber",

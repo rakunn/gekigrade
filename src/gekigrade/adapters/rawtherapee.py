@@ -42,6 +42,7 @@ class LensfunSupport(TypedDict):
     camera_match: bool
     camera_mounts: list[str]
     lens_match: bool
+    lens_maker: str | None
     lens_mounts: list[str]
     requested: list[str]
     supported: list[str]
@@ -400,6 +401,7 @@ def inspect_lensfun_support(
         "camera_match": False,
         "camera_mounts": [],
         "lens_match": False,
+        "lens_maker": None,
         "lens_mounts": [],
         "requested": ["distortion", "vignetting"],
         "supported": [],
@@ -416,6 +418,7 @@ def inspect_lensfun_support(
 
     wanted_make = _normalized_equipment_name(metadata.get("Make", ""))
     wanted_camera = _normalized_equipment_name(metadata.get("Model", ""))
+    wanted_lens_make = _normalized_equipment_name(metadata.get("LensMake", ""))
     wanted_lens = _normalized_equipment_name(metadata.get("LensModel", ""))
     roots = [ET.parse(item["path"]).getroot() for item in database_status["files"]]
     camera_mounts: set[str] = set()
@@ -436,8 +439,10 @@ def inspect_lensfun_support(
     }
     if not normalized_camera_mounts:
         return base
+    lens_matches: list[tuple[ET.Element, str, list[str]]] = []
     for root in roots:
         for lens in root.findall("lens"):
+            maker = lens.findtext("maker", "").strip()
             model = _normalized_equipment_name(lens.findtext("model", ""))
             lens_mounts = sorted(
                 {
@@ -452,19 +457,28 @@ def inspect_lensfun_support(
                 and wanted_lens == model
                 and normalized_camera_mounts.intersection(normalized_lens_mounts)
             ):
-                base["lens_match"] = True
-                base["lens_mounts"] = lens_mounts
-                calibration = lens.find("calibration")
-                if calibration is not None:
-                    base["supported"] = sorted(
-                        {
-                            child.tag
-                            for child in calibration
-                            if child.tag in {"distortion", "vignetting"}
-                        }
-                    )
-                base["all_requested_supported"] = set(base["requested"]).issubset(base["supported"])
-                return base
+                lens_matches.append((lens, maker, lens_mounts))
+    if wanted_lens_make:
+        lens_matches = [
+            match
+            for match in lens_matches
+            if _normalized_equipment_name(match[1]) == wanted_lens_make
+        ]
+    elif len({_normalized_equipment_name(match[1]) for match in lens_matches}) > 1:
+        base["limitation"] = "Lensfun lens match is ambiguous across makers; LensMake is required"
+        return base
+    if not lens_matches:
+        return base
+    lens, maker, lens_mounts = lens_matches[0]
+    base["lens_match"] = True
+    base["lens_maker"] = maker
+    base["lens_mounts"] = lens_mounts
+    calibration = lens.find("calibration")
+    if calibration is not None:
+        base["supported"] = sorted(
+            {child.tag for child in calibration if child.tag in {"distortion", "vignetting"}}
+        )
+    base["all_requested_supported"] = set(base["requested"]).issubset(base["supported"])
     return base
 
 

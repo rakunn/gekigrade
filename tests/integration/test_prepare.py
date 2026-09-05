@@ -103,6 +103,7 @@ print(json.dumps([{
     "Orientation": 1,
     "Make": "SONY",
     "Model": "ILCE-TEST",
+    "LensMake": "Sony",
     "LensModel": "FE TEST",
     "ExposureTime": 0.008,
     "FNumber": 8.0,
@@ -272,6 +273,7 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     assert metadata["stored_dimensions"] == {"width": 180, "height": 120}
     assert metadata["oriented_dimensions"] == {"width": 180, "height": 120}
     assert metadata["capture_metadata"]["Model"] == "ILCE-TEST"
+    assert metadata["capture_metadata"]["LensMake"] == "Sony"
     metadata_reader = metadata["metadata_reader"]
     assert metadata_reader == {
         "name": "ExifTool",

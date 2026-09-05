@@ -197,10 +197,10 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
         raise ValueError("ARW dimensions exceed the 200 megapixel safety limit")
     if orientation not in range(1, 9):
         raise ValueError("ARW EXIF orientation is outside the supported range")
-    if orientation not in {1, 6, 8}:
+    if orientation != 1:
         raise ValueError(
             f"RAW EXIF orientation {orientation} is not yet supported safely; "
-            "only normal and 90-degree rotations are accepted"
+            "only normal orientation 1 is accepted"
         )
     oriented_width, oriented_height = (
         (height, width) if orientation in {5, 6, 7, 8} else (width, height)
@@ -572,6 +572,9 @@ def prepare_job(
             "lens_correction": lens_correction,
         }
     working_dimensions, working_sha256, working_profile_sha256 = _validate_working_tiff(working)
+    if working_sha256 != normalization_tool["output_sha256"]:
+        working.unlink(missing_ok=True)
+        raise RuntimeError("working TIFF does not match ImageMagick output")
     if source_format == "JPEG" and working_dimensions != source["oriented_dimensions"]:
         working.unlink(missing_ok=True)
         raise RuntimeError("JPEG working TIFF dimensions do not match the oriented source")
@@ -599,6 +602,9 @@ def prepare_job(
     pixels, preview_sha256, output_profile_sha256 = _load_validated_srgb(
         preview, expected_dimensions=expected_preview_dimensions
     )
+    if preview_sha256 != preview_tool["output_sha256"]:
+        preview.unlink(missing_ok=True)
+        raise RuntimeError("preview JPEG does not match ImageMagick output")
     source["prepared_artifacts"] = {
         "working_tiff_sha256": working_sha256,
         "preview_jpeg_sha256": preview_sha256,

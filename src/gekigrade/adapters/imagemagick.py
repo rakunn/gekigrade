@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -35,6 +36,10 @@ class ProcessorIdentity(TypedDict):
     environment: dict[str, str]
 
 
+class ProcessorResult(ProcessorIdentity):
+    output_sha256: str
+
+
 def preview_dimensions(
     width: int, height: int, *, max_edge: int = PREVIEW_MAX_EDGE
 ) -> tuple[int, int]:
@@ -56,6 +61,35 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _file_identity(status: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
+
+
+def _bind_output(target: Path, identity: ProcessorIdentity) -> ProcessorResult:
+    if target.is_symlink() or not target.is_file():
+        target.unlink(missing_ok=True)
+        raise ProcessorError("ImageMagick output must be a regular, non-symlink file")
+    try:
+        with target.open("rb") as stream:
+            opened_identity = _file_identity(os.fstat(stream.fileno()))
+            digest = hashlib.sha256()
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+            closed_identity = _file_identity(os.fstat(stream.fileno()))
+        path_identity = _file_identity(target.stat())
+    except OSError as exc:
+        target.unlink(missing_ok=True)
+        raise ProcessorError(f"ImageMagick output could not be secured: {exc}") from exc
+    if (
+        target.is_symlink()
+        or opened_identity != closed_identity
+        or path_identity != opened_identity
+    ):
+        target.unlink(missing_ok=True)
+        raise ProcessorError("ImageMagick output changed while it was fingerprinted")
+    return {**identity, "output_sha256": digest.hexdigest()}
 
 
 @contextmanager
@@ -164,7 +198,7 @@ def run_magick(
 
 def normalize_jpeg(
     source: Path, target: Path, *, has_profile: bool, executable: Path = MAGICK
-) -> ProcessorIdentity:
+) -> ProcessorResult:
     required_profiles = {"working": ACESCG_PROFILE}
     if not has_profile:
         required_profiles["assumed-input"] = SRGB_PROFILE
@@ -187,15 +221,16 @@ def normalize_jpeg(
                 f"TIFF:{target}",
             ]
         )
-        return run_magick(arguments, executable=executable)
+        identity = run_magick(arguments, executable=executable)
+        return _bind_output(target, identity)
 
 
 def normalize_profiled_tiff(
     source: Path, target: Path, *, executable: Path = MAGICK
-) -> ProcessorIdentity:
+) -> ProcessorResult:
     with _stable_profile_snapshots(target, {"working": ACESCG_PROFILE}) as profiles:
         working_profile = str(profiles["working"])
-        return run_magick(
+        identity = run_magick(
             [
                 str(source),
                 "-auto-orient",
@@ -216,6 +251,7 @@ def normalize_profiled_tiff(
             ],
             executable=executable,
         )
+        return _bind_output(target, identity)
 
 
 def make_preview(
@@ -224,10 +260,10 @@ def make_preview(
     *,
     max_edge: int = PREVIEW_MAX_EDGE,
     executable: Path = MAGICK,
-) -> ProcessorIdentity:
+) -> ProcessorResult:
     with _stable_profile_snapshots(target, {"output": SRGB_PROFILE}) as profiles:
         output_profile = str(profiles["output"])
-        return run_magick(
+        identity = run_magick(
             [
                 str(source),
                 "-profile",
@@ -245,3 +281,4 @@ def make_preview(
             ],
             executable=executable,
         )
+        return _bind_output(target, identity)

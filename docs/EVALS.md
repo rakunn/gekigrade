@@ -17,6 +17,7 @@
 - JPEG and RAW normalization plus preview encoding record the exact resolved ImageMagick path, version, and executable hash for each operation; a binary change during an operation is rejected.
 - ImageMagick receives private ICC snapshots whose hashes remain stable across the command. A changed snapshot or source system profile rejects and removes the produced artifact.
 - ImageMagick receives only the recorded allowlisted environment with fixed locale, system path, and single-thread ImageMagick/OpenMP settings; caller configuration and module paths do not cross the subprocess boundary.
+- Each ImageMagick adapter result contains the SHA-256 of a regular, non-symlink, identity-stable output; working-TIFF and preview validation must reproduce that exact invocation-bound hash.
 - RawTherapee camera-input provenance records the selected DCP or ICC profile, or the camera-matrix fallback, together with camera-alias and camera-constants hashes; the resource fingerprint must remain unchanged during development.
 - RawTherapee executable version and file hash are captured before launch and must remain unchanged after exit.
 - RAW preparation rejects a caller-supplied PP3, and the version captured at the launch boundary must equal the supported 5.13 release.
@@ -28,7 +29,7 @@
 - Doctor evaluates the fixed ExifTool and ImageMagick paths used by default preparation; unrelated PATH-only installations cannot make readiness pass.
 - RAW doctor returns structured not-ready output rather than raising when RawTherapee application metadata is malformed or unreadable.
 - The expected `RTv4_Large` profile is derived from the selected RawTherapee bundle, fingerprinted across development, and required to match the developed TIFF's embedded ICC bytes.
-- RAW EXIF orientations 1, 6, and 8 are accepted; orientations 2, 3, 4, 5, and 7 fail before job creation until their complete pixel transforms can be verified. For 6 and 8, working dimensions must also retain the portrait/landscape ordering implied by inspection before exact developed dimensions replace the metadata expectation; normal RAW border cropping remains allowed.
+- RAW EXIF orientation 1 is accepted; orientations 2–8 fail before job creation until their complete pixel transforms, including rotation direction and mirroring, can be verified. The working dimensions must retain the source axis ordering before exact developed dimensions replace the metadata expectation; normal RAW border cropping remains allowed.
 - Every normalized working image must decode as a three-channel, 16-bit RGB TIFF with the expected embedded ACEScg profile before preview or analysis begins. Its accepted SHA-256 is calculated from the same stable open file descriptor used for structural validation.
 - The validated working TIFF hash remains unchanged across preview generation and through manifest publication. The preview must decode as three-channel JPEG, embed the expected sRGB profile, and remain hash-stable through pixel loading and manifest publication.
 - A final RAW source check precedes the prepared manifest; a source change during manifest publication removes the manifest and fails the job.

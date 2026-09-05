@@ -145,10 +145,11 @@ def test_normalize_profiled_tiff_uses_one_stable_private_acescg_snapshot(
 
     monkeypatch.setattr("gekigrade.adapters.imagemagick.run_magick", inspect_invocation)
 
-    normalize_profiled_tiff(source, target, executable=tmp_path / "magick")
+    result = normalize_profiled_tiff(source, target, executable=tmp_path / "magick")
 
     assert captured_snapshot is not None
     assert not captured_snapshot.exists()
+    assert result["output_sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
 
 
 def test_normalize_profiled_tiff_rejects_a_changed_profile_snapshot(

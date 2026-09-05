@@ -17,6 +17,7 @@ from PIL import Image
 import gekigrade.pipeline.prepare as prepare_module
 from gekigrade.adapters.imagemagick import MAGICK_ENVIRONMENT, ProcessorIdentity
 from gekigrade.adapters.imagemagick import make_preview as real_make_preview
+from gekigrade.adapters.imagemagick import normalize_jpeg as real_normalize_jpeg
 from gekigrade.adapters.imagemagick import normalize_profiled_tiff as real_normalize_profiled_tiff
 from gekigrade.adapters.rawtherapee import DEFAULT_RAW_PROFILE, RawTherapeeError
 from gekigrade.doctor import ACESCG_PROFILE, SRGB_PROFILE
@@ -300,6 +301,12 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
         Path("/opt/homebrew/bin/magick").resolve()
     )
     assert normalization_tool["environment"] == MAGICK_ENVIRONMENT
+    assert (
+        normalization_tool["output_sha256"] == metadata["prepared_artifacts"]["working_tiff_sha256"]
+    )
+    preview_tool = metadata["processing_tools"]["preview"]
+    assert preview_tool["environment"] == MAGICK_ENVIRONMENT
+    assert preview_tool["output_sha256"] == metadata["prepared_artifacts"]["preview_jpeg_sha256"]
     assert metadata["prepared_artifacts"] == {
         "working_tiff_sha256": _sha256(job / "intermediate/working.tif"),
         "preview_jpeg_sha256": _sha256(job / "preview.jpg"),
@@ -358,23 +365,7 @@ def test_prepare_does_not_expose_a_raw_profile_override() -> None:
     assert "raw_output_profile" not in inspect.signature(prepare_job).parameters
 
 
-def test_prepare_rejects_unrotated_raw_output_for_rotated_exif_orientation(
-    tmp_path: Path,
-) -> None:
-    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path, orientation=6)
-
-    with pytest.raises(RuntimeError, match="RAW working TIFF orientation does not match"):
-        prepare_job(
-            source,
-            tmp_path / "raw-job",
-            exiftool_executable=exiftool,
-            rawtherapee_executable=rawtherapee,
-        )
-    assert not (tmp_path / "raw-job/preview.jpg").exists()
-    assert not (tmp_path / "raw-job/manifest.json").exists()
-
-
-@pytest.mark.parametrize("orientation", [2, 3, 4, 5, 7])
+@pytest.mark.parametrize("orientation", [2, 3, 4, 5, 6, 7, 8])
 def test_prepare_rejects_raw_orientations_without_a_fully_verifiable_transform(
     tmp_path: Path, orientation: int
 ) -> None:
@@ -388,6 +379,61 @@ def test_prepare_rejects_raw_orientations_without_a_fully_verifiable_transform(
             rawtherapee_executable=rawtherapee,
         )
     assert not (tmp_path / "raw-job").exists()
+
+
+def test_prepare_rejects_a_valid_working_tiff_replaced_after_imagemagick(
+    tagged_oriented_jpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alternate = tmp_path / "alternate.jpg"
+    alternate_exif = Image.Exif()
+    alternate_exif[274] = 6
+    Image.new("RGB", (320, 240), (12, 180, 72)).save(
+        alternate,
+        format="JPEG",
+        exif=alternate_exif,
+        icc_profile=SRGB_PROFILE.read_bytes(),
+    )
+    replacement = tmp_path / "replacement-working.tif"
+    real_normalize_jpeg(alternate, replacement, has_profile=True)
+
+    def normalize_then_replace(
+        source: Path, working: Path, *, has_profile: bool, executable: Path
+    ) -> ProcessorIdentity:
+        result = real_normalize_jpeg(
+            source, working, has_profile=has_profile, executable=executable
+        )
+        shutil.copyfile(replacement, working)
+        return result
+
+    monkeypatch.setattr(prepare_module, "normalize_jpeg", normalize_then_replace)
+
+    with pytest.raises(RuntimeError, match="working TIFF does not match ImageMagick output"):
+        prepare_job(tagged_oriented_jpeg, tmp_path / "jpeg-job")
+    assert not (tmp_path / "jpeg-job/intermediate/working.tif").exists()
+    assert not (tmp_path / "jpeg-job/preview.jpg").exists()
+    assert not (tmp_path / "jpeg-job/manifest.json").exists()
+
+
+def test_prepare_rejects_a_valid_preview_replaced_after_imagemagick(
+    tagged_oriented_jpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def preview_then_replace(
+        working: Path, preview: Path, *, executable: Path
+    ) -> ProcessorIdentity:
+        result = real_make_preview(working, preview, executable=executable)
+        with Image.open(preview) as produced:
+            replacement = produced.copy()
+            profile = produced.info["icc_profile"]
+        replacement.putpixel((0, 0), (255, 0, 255))
+        replacement.save(preview, quality=92, subsampling=0, icc_profile=profile)
+        return result
+
+    monkeypatch.setattr(prepare_module, "make_preview", preview_then_replace)
+
+    with pytest.raises(RuntimeError, match="preview JPEG does not match ImageMagick output"):
+        prepare_job(tagged_oriented_jpeg, tmp_path / "jpeg-job")
+    assert not (tmp_path / "jpeg-job/preview.jpg").exists()
+    assert not (tmp_path / "jpeg-job/manifest.json").exists()
 
 
 def test_prepare_rejects_a_raw_source_changed_after_inspection(

@@ -69,7 +69,7 @@ def _profile_status(path: Path) -> dict[str, str | bool | None]:
     }
 
 
-def _icc_profile_status(path: Path) -> dict[str, str | bool | None]:
+def icc_profile_status(path: Path) -> dict[str, str | bool | None]:
     status: dict[str, str | bool | None] = {
         "available": False,
         "valid": False,
@@ -263,7 +263,7 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
         "acescg": _profile_status(ACESCG_PROFILE),
         "srgb": _profile_status(SRGB_PROFILE),
         "raw_development_pp3": raw_profile_status,
-        "rawtherapee_output": _icc_profile_status(rawtherapee_output_profile),
+        "rawtherapee_output": icc_profile_status(rawtherapee_output_profile),
         "rawtherapee_camera_resources": camera_resources,
         "lensfun_database": lensfun_database,
     }

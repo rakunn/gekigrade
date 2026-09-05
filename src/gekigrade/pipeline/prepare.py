@@ -35,6 +35,7 @@ from gekigrade.doctor import (
     EXIFTOOL_CLI,
     SRGB_PROFILE,
     build_doctor_report,
+    icc_profile_status,
     sha256_file,
 )
 from gekigrade.doctor import EXIFTOOL_ENVIRONMENT as DOCTOR_EXIFTOOL_ENVIRONMENT
@@ -500,7 +501,7 @@ def _artifact_manifest(
     *,
     working_profile_sha256: str,
     output_profile_sha256: str,
-    raw_output_profile_artifact: tuple[Path, str] | None = None,
+    raw_output_profile_status: dict[str, str | bool | None] | None = None,
 ) -> dict[str, Any]:
     doctor = build_doctor_report(run_color_probe=False)
     doctor["profiles"]["acescg"] = {
@@ -513,10 +514,8 @@ def _artifact_manifest(
         "path": str(SRGB_PROFILE),
         "sha256": output_profile_sha256,
     }
-    if raw_output_profile_artifact is not None:
-        raw_output_profile, raw_output_profile_sha256 = raw_output_profile_artifact
-        doctor["profiles"]["rawtherapee_output"]["path"] = str(raw_output_profile)
-        doctor["profiles"]["rawtherapee_output"]["sha256"] = raw_output_profile_sha256
+    if raw_output_profile_status is not None:
+        doctor["profiles"]["rawtherapee_output"] = dict(raw_output_profile_status)
     artifacts: dict[str, dict[str, Any]] = {}
     for path in sorted(job.rglob("*")):
         if path.is_file() and path.name != "manifest.json":
@@ -568,6 +567,7 @@ def prepare_job(
     preview = job / "preview.jpg"
     raw_profile_artifact: tuple[Path, str] | None = None
     raw_output_profile_artifact: tuple[Path, str] | None = None
+    raw_output_profile_status: dict[str, str | bool | None] | None = None
     if source_format == "JPEG":
         normalization_tool = normalize_jpeg(
             source_path.resolve(),
@@ -580,9 +580,14 @@ def prepare_job(
         developed = raw_work / "developed.tif"
         lensfun_database = lensfun_database_for_executable(rawtherapee_executable)
         raw_output_profile = rawtherapee_output_profile_for_executable(rawtherapee_executable)
-        if raw_output_profile.is_symlink() or not raw_output_profile.is_file():
-            raise RuntimeError("expected RawTherapee output ICC profile is unavailable")
-        expected_intermediate_profile_sha256 = sha256_file(raw_output_profile)
+        raw_output_profile_status = icc_profile_status(raw_output_profile)
+        if (
+            raw_output_profile_status["available"] is not True
+            or raw_output_profile_status["valid"] is not True
+            or not isinstance(raw_output_profile_status["sha256"], str)
+        ):
+            raise RawTherapeeError("expected RawTherapee output ICC profile is invalid")
+        expected_intermediate_profile_sha256 = raw_output_profile_status["sha256"]
         raw_output_profile_artifact = (
             raw_output_profile,
             expected_intermediate_profile_sha256,
@@ -748,7 +753,7 @@ def prepare_job(
             source,
             working_profile_sha256=working_profile_sha256,
             output_profile_sha256=output_profile_sha256,
-            raw_output_profile_artifact=raw_output_profile_artifact,
+            raw_output_profile_status=raw_output_profile_status,
         ),
     )
     if not _artifact_matches(working, working_sha256) or not _artifact_matches(

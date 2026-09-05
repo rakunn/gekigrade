@@ -15,6 +15,7 @@ import OpenImageIO as oiio
 import pytest
 from PIL import Image
 
+import gekigrade.doctor as doctor_module
 import gekigrade.pipeline.prepare as prepare_module
 from gekigrade.adapters.imagemagick import MAGICK_ENVIRONMENT, ProcessorIdentity
 from gekigrade.adapters.imagemagick import make_preview as real_make_preview
@@ -400,6 +401,39 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
         manifest["artifacts"]["preview.jpg"]["sha256"]
         == metadata["prepared_artifacts"]["preview_jpeg_sha256"]
     )
+
+
+def test_prepare_manifest_uses_the_selected_rawtherapee_output_profile_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    selected_profile = (
+        rawtherapee.parent.parent / "Resources/share/iccprofiles/output/RTv4_Large.icc"
+    )
+    monkeypatch.setattr(
+        doctor_module,
+        "RAWTHERAPEE_CLI",
+        tmp_path / "missing-default/RawTherapee.app/Contents/MacOS/rawtherapee-cli",
+    )
+    job = tmp_path / "raw-job"
+
+    prepare_job(
+        source,
+        job,
+        exiftool_executable=exiftool,
+        rawtherapee_executable=rawtherapee,
+    )
+
+    manifest = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["tools"]["profiles"]["rawtherapee_output"] == {
+        "available": True,
+        "valid": True,
+        "path": str(selected_profile),
+        "sha256": _sha256(selected_profile),
+        "color_space": "RGB",
+        "device_class": "mntr",
+        "error": None,
+    }
 
 
 def test_raw_dimension_tolerance_accepts_the_verified_sony_border_crop() -> None:

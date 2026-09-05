@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import plistlib
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -24,6 +26,31 @@ def test_doctor_confirms_milestone_one_runtime() -> None:
     assert report["color_probe"]["repeat_tiff_file_hash_equal"] is True
     assert report["color_probe"]["working_profile_embedded"] is True
     assert report["color_probe"]["ocio_roundtrip_rmse"] < 0.00001
+
+
+def test_doctor_color_probe_uses_the_preparation_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_environments: list[dict[str, str] | None] = []
+    real_run = subprocess.run
+
+    def capture_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        if isinstance(command, list) and "-profile" in command:
+            observed_environments.append(kwargs.get("env"))
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setenv("MAGICK_CONFIGURE_PATH", "/caller/config")
+    monkeypatch.setenv("MAGICK_CODER_MODULE_PATH", "/caller/coders")
+    monkeypatch.setattr(subprocess, "run", capture_run)
+
+    report = build_doctor_report()
+
+    assert len(observed_environments) == 2
+    assert all(
+        environment == doctor_module.MAGICK_ENVIRONMENT for environment in observed_environments
+    )
+    assert report["color_probe"]["environment"] == doctor_module.MAGICK_ENVIRONMENT
 
 
 def test_doctor_reports_raw_adapter_separately_from_jpeg_readiness() -> None:

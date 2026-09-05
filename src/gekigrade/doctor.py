@@ -36,6 +36,15 @@ EXIFTOOL_CLI = Path("/opt/homebrew/bin/exiftool")
 IMAGEMAGICK_CLI = Path("/opt/homebrew/bin/magick")
 RAWTHERAPEE_CLI = Path("/Applications/RawTherapee.app/Contents/MacOS/rawtherapee-cli")
 RAWTHERAPEE_PLIST = Path("/Applications/RawTherapee.app/Contents/Info.plist")
+MAGICK_ENVIRONMENT = {
+    "LANG": "C",
+    "LC_ALL": "C",
+    "MAGICK_THREAD_LIMIT": "1",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OMP_SCHEDULE": "static",
+    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+}
 
 
 def sha256_file(path: Path) -> str:
@@ -163,9 +172,14 @@ def _color_probe(magick_path: str) -> dict[str, Any]:
                 text=True,
                 timeout=30,
                 stdin=subprocess.DEVNULL,
+                env=MAGICK_ENVIRONMENT,
             )
             if result.returncode != 0:
-                return {"passed": False, "error": result.stderr.strip()}
+                return {
+                    "passed": False,
+                    "error": result.stderr.strip(),
+                    "environment": dict(MAGICK_ENVIRONMENT),
+                }
         buffer = oiio.ImageBuf(str(first))
         pixels = np.asarray(buffer.get_pixels(oiio.FLOAT), dtype=np.float32)[:, :, :3]
         roundtrip = np.ascontiguousarray(pixels.copy())
@@ -181,6 +195,7 @@ def _color_probe(magick_path: str) -> dict[str, Any]:
             "repeat_tiff_file_hash_equal": repeated,
             "working_profile_embedded": profile_embedded,
             "ocio_roundtrip_rmse": rmse,
+            "environment": dict(MAGICK_ENVIRONMENT),
         }
 
 

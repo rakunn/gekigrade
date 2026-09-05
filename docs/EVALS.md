@@ -20,6 +20,7 @@
 - Each ImageMagick adapter result contains the SHA-256 of a regular, non-symlink, identity-stable output; working-TIFF and preview validation must reproduce that exact invocation-bound hash.
 - RawTherapee camera-input provenance records the selected DCP or ICC profile, or the camera-matrix fallback, together with camera-alias and camera-constants hashes; the resource fingerprint must remain unchanged during development.
 - RawTherapee executable version and file hash are captured before launch and must remain unchanged after exit.
+- ExifTool version and metadata reads both pass `-config ""` and the same recorded C-locale, fixed-PATH environment. Caller `HOME`, `EXIFTOOL_HOME`, and unrelated variables must not cross the subprocess boundary.
 - RAW preparation rejects a caller-supplied PP3, requires the shipped profile to match its pinned digest before creating a job, and requires the execution copy to retain that identity through manifest publication. Doctor reports RAW ready only for the same known profile. The version captured at the launch boundary must equal the supported 5.13 release.
 - Source format detection rejects symlinks and non-regular files before reading signature bytes; the copied PP3 hash must remain unchanged across RAW execution.
 - Lensfun inspection is derived from the selected RawTherapee bundle, searches and fingerprints every bundled XML file including third-party lens files, requires overlapping camera and lens mounts, and keeps the aggregate fingerprint unchanged during development.
@@ -27,6 +28,7 @@
 - Lensfun camera/lens database matches and actual-application confirmation are separate fields; absent CLI confirmation must remain false.
 - RAW doctor readiness requires present camera-profile directories, a regular non-symlink output profile that LittleCMS can parse, a parseable alias map, structurally valid RawTherapee JSON-with-comments camera constants, and a complete parseable Lensfun XML set.
 - Doctor evaluates the fixed ExifTool and ImageMagick paths used by default preparation; unrelated PATH-only installations cannot make readiness pass.
+- Doctor's ImageMagick color probe uses and records the exact allowlisted environment used by preparation; caller configuration/coder paths cannot affect readiness.
 - RAW doctor returns structured not-ready output rather than raising when RawTherapee application metadata is malformed or unreadable, and rejects a symlinked RawTherapee executable so version and resource evidence cannot come from different bundles.
 - The expected `RTv4_Large` profile is derived from the selected RawTherapee bundle, fingerprinted across development, and required to match the developed TIFF's embedded ICC bytes.
 - RAW EXIF orientation 1 is accepted; orientations 2–8 fail before job creation until their complete pixel transforms, including rotation direction and mirroring, can be verified. The working dimensions must retain the source axis ordering, must not exceed the inspected dimensions, and must retain at least 95% of both inspected axes before exact developed dimensions replace the metadata expectation; normal RAW border cropping within that bound remains allowed.

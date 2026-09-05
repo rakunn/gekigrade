@@ -47,6 +47,11 @@ MAX_SOURCE_BYTES = 1024 * 1024 * 1024
 MAX_PIXEL_COUNT = 200_000_000
 RAW_MIN_DIMENSION_RETENTION_PERCENT = 95
 EXIFTOOL = EXIFTOOL_CLI
+EXIFTOOL_ENVIRONMENT = {
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+}
 
 
 def _inspect_jpeg(
@@ -105,18 +110,19 @@ def inspect_jpeg(path: Path) -> dict[str, Any]:
     return result
 
 
-def _exiftool_identity(executable: Path) -> dict[str, str]:
+def _exiftool_identity(executable: Path) -> dict[str, Any]:
     if not executable.is_file() or executable.stat().st_mode & 0o111 == 0:
         raise RuntimeError("ExifTool is unavailable; run `geki doctor`")
     resolved = executable.resolve(strict=True)
     executable_sha256 = sha256_file(resolved)
     version_result = subprocess.run(
-        [str(resolved), "-ver"],
+        [str(resolved), "-config", "", "-ver"],
         capture_output=True,
         check=False,
         text=True,
         timeout=15,
         stdin=subprocess.DEVNULL,
+        env=EXIFTOOL_ENVIRONMENT,
     )
     if version_result.returncode != 0:
         raise RuntimeError(f"ExifTool version check failed: {version_result.stderr.strip()}")
@@ -130,16 +136,20 @@ def _exiftool_identity(executable: Path) -> dict[str, str]:
         "path": str(resolved),
         "version": version,
         "executable_sha256": executable_sha256,
+        "configuration": "disabled",
+        "environment": dict(EXIFTOOL_ENVIRONMENT),
     }
 
 
 def _read_exiftool(
     path: Path, *, executable: Path = EXIFTOOL
-) -> tuple[dict[str, Any], dict[str, str]]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     identity = _exiftool_identity(executable)
     result = subprocess.run(
         [
             identity["path"],
+            "-config",
+            "",
             "-json",
             "-n",
             "-FileType",
@@ -163,6 +173,7 @@ def _read_exiftool(
         text=True,
         timeout=15,
         stdin=subprocess.DEVNULL,
+        env=EXIFTOOL_ENVIRONMENT,
     )
     if result.returncode != 0:
         raise RuntimeError(f"ExifTool failed: {result.stderr.strip()}")

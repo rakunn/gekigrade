@@ -92,7 +92,7 @@ def _raw_test_dependencies(
 import json
 import sys
 
-if sys.argv[1:] == ["-ver"]:
+if sys.argv[1:] == ["-config", "", "-ver"]:
     print("13.55")
     raise SystemExit
 
@@ -214,6 +214,45 @@ def test_prepare_builds_a_complete_oriented_profiled_job_without_touching_source
     )
 
 
+def test_exiftool_disables_user_configuration_and_uses_a_pinned_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed = tmp_path / "observed.json"
+    executable = _write_executable(
+        tmp_path / "fake-exiftool",
+        f"""#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+if "-ver" in sys.argv:
+    print("13.55")
+else:
+    pathlib.Path({str(observed)!r}).write_text(json.dumps({{
+        "arguments": sys.argv[1:],
+        "environment": dict(os.environ),
+    }}), encoding="utf-8")
+    print("[{{}}]")
+""",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path / "hostile-home"))
+    monkeypatch.setenv("EXIFTOOL_HOME", str(tmp_path / "hostile-exiftool-home"))
+
+    _, identity = prepare_module._read_exiftool(tmp_path / "input.jpg", executable=executable)
+
+    captured = json.loads(observed.read_text(encoding="utf-8"))
+    assert captured["arguments"][:2] == ["-config", ""]
+    assert all(
+        captured["environment"].get(key) == value
+        for key, value in prepare_module.EXIFTOOL_ENVIRONMENT.items()
+    )
+    assert "HOME" not in captured["environment"]
+    assert "EXIFTOOL_HOME" not in captured["environment"]
+    assert identity["configuration"] == "disabled"
+    assert identity["environment"] == prepare_module.EXIFTOOL_ENVIRONMENT
+
+
 def test_prepare_rejects_non_jpeg_before_creating_job(tmp_path: Path) -> None:
     source = tmp_path / "not-an-image.jpg"
     source.write_text("not a JPEG", encoding="utf-8")
@@ -293,6 +332,8 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
         "path": str(exiftool.resolve()),
         "version": "13.55",
         "executable_sha256": _sha256(exiftool),
+        "configuration": "disabled",
+        "environment": prepare_module.EXIFTOOL_ENVIRONMENT,
     }
     normalization_tool = metadata["processing_tools"]["normalization"]
     assert normalization_tool["name"] == "ImageMagick"
@@ -916,7 +957,7 @@ import json
 import pathlib
 import sys
 
-if sys.argv[1:] == ["-ver"]:
+if sys.argv[1:] == ["-config", "", "-ver"]:
     print("13.55")
     raise SystemExit
 
@@ -950,7 +991,7 @@ import json
 import pathlib
 import sys
 
-if sys.argv[1:] == ["-ver"]:
+if sys.argv[1:] == ["-config", "", "-ver"]:
     print("13.55")
     raise SystemExit
 

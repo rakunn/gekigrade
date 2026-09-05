@@ -9,19 +9,16 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TypedDict
 
-from gekigrade.doctor import ACESCG_PROFILE, IMAGEMAGICK_CLI, SRGB_PROFILE
+from gekigrade.doctor import (
+    ACESCG_PROFILE,
+    IMAGEMAGICK_CLI,
+    SRGB_PROFILE,
+)
+from gekigrade.doctor import MAGICK_ENVIRONMENT as _MAGICK_ENVIRONMENT
 
 MAGICK = IMAGEMAGICK_CLI
 PREVIEW_MAX_EDGE = 2048
-MAGICK_ENVIRONMENT = {
-    "LANG": "C",
-    "LC_ALL": "C",
-    "MAGICK_THREAD_LIMIT": "1",
-    "OMP_DYNAMIC": "FALSE",
-    "OMP_NUM_THREADS": "1",
-    "OMP_SCHEDULE": "static",
-    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-}
+MAGICK_ENVIRONMENT = _MAGICK_ENVIRONMENT
 
 
 class ProcessorError(RuntimeError):

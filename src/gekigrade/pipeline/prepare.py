@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any, BinaryIO, cast
@@ -361,6 +362,28 @@ def _artifact_matches(path: Path, expected_sha256: str) -> bool:
         return False
 
 
+def _raw_source_matches(path: Path, expected_sha256: str) -> bool:
+    flags = os.O_RDONLY | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            opened_status = os.fstat(stream.fileno())
+            opened_identity = _file_identity(opened_status)
+            if not stat.S_ISREG(opened_status.st_mode):
+                return False
+            actual_sha256 = _sha256_stream(stream)
+            closed_identity = _file_identity(os.fstat(stream.fileno()))
+        path_status = path.lstat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(path_status.st_mode)
+        and opened_identity == closed_identity == _file_identity(path_status)
+        and actual_sha256 == expected_sha256
+    )
+
+
 def _orientation_axis_matches(expected: dict[str, int], actual: dict[str, int]) -> bool:
     expected_axis = (expected["width"] > expected["height"]) - (
         expected["width"] < expected["height"]
@@ -657,7 +680,7 @@ def prepare_job(
         raise RuntimeError(
             "prepared working or preview artifact changed before manifest publication"
         )
-    if source_format == "ARW" and sha256_file(source_path) != source["source_sha256"]:
+    if source_format == "ARW" and not _raw_source_matches(source_path, source["source_sha256"]):
         raise RawTherapeeError("source RAW changed during job preparation")
     if raw_profile_artifact is not None and not _artifact_matches(*raw_profile_artifact):
         raise RawTherapeeError("copied RAW development profile changed before manifest publication")
@@ -687,7 +710,7 @@ def prepare_job(
     ):
         manifest_path.unlink(missing_ok=True)
         raise RuntimeError("validated color profile changed while publishing the job manifest")
-    if source_format == "ARW" and sha256_file(source_path) != source["source_sha256"]:
+    if source_format == "ARW" and not _raw_source_matches(source_path, source["source_sha256"]):
         manifest_path.unlink(missing_ok=True)
         raise RawTherapeeError("source RAW changed while publishing the job manifest")
     if raw_profile_artifact is not None and not _artifact_matches(*raw_profile_artifact):

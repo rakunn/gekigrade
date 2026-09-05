@@ -95,6 +95,30 @@ def test_doctor_reports_malformed_rawtherapee_metadata_as_not_ready(
     assert report["raw_status"] == "not-ready"
 
 
+def test_doctor_rejects_a_symlinked_rawtherapee_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "target/RawTherapee.app/Contents/MacOS/rawtherapee-cli"
+    target.parent.mkdir(parents=True)
+    target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    target.chmod(0o755)
+    linked = tmp_path / "linked/RawTherapee.app/Contents/MacOS/rawtherapee-cli"
+    linked.parent.mkdir(parents=True)
+    linked.symlink_to(target)
+    plist = linked.parent.parent / "Info.plist"
+    plist.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "5.13"}))
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_CLI", linked)
+    monkeypatch.setattr(doctor_module, "RAWTHERAPEE_PLIST", plist)
+
+    report = build_doctor_report(run_color_probe=False)
+
+    assert report["tools"]["rawtherapee"]["available"] is False
+    assert report["tools"]["rawtherapee"]["path"] is None
+    assert report["tools"]["rawtherapee"]["version"] is None
+    assert report["ready_for_raw"] is False
+    assert report["raw_status"] == "not-ready"
+
+
 def test_doctor_does_not_substitute_path_tools_for_prepare_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

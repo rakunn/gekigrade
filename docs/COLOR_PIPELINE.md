@@ -44,3 +44,5 @@ Analysis uses encoded-sRGB thresholds of at most `1/255` for shadows and at leas
 ## Assumptions
 
 Strict reproducibility requires identical ACEScg/sRGB profile hashes, OCIO configuration, OIIO/ImageMagick versions, architecture, and thread configuration. Cross-platform output is assessed by decoded-pixel tolerance. The system ICC dependency makes the first slice macOS-specific; a redistributable pinned profile requires a later licensing and portability decision.
+
+At the RAW publication boundary, the source is opened without following symlinks and without blocking on special files. It must remain one regular-file identity throughout hashing and still match the recorded digest; disappearance, replacement, or another filesystem error fails preparation and removes any provisional manifest. Lensfun mounts are trusted only when normalized camera make/model identifies exactly one database record. Doctor rejects a symlinked RawTherapee CLI before reading bundle metadata, so readiness cannot combine version evidence from one application root with resources from another.

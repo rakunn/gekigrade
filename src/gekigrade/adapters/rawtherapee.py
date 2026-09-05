@@ -474,19 +474,26 @@ def inspect_lensfun_support(
     wanted_lens_make = _normalized_equipment_name(metadata.get("LensMake", ""))
     wanted_lens = _normalized_equipment_name(metadata.get("LensModel", ""))
     roots = [ET.parse(item["path"]).getroot() for item in database_status["files"]]
-    camera_mounts: set[str] = set()
+    camera_matches: list[ET.Element] = []
     for root in roots:
         for camera in root.findall("camera"):
             make = _normalized_equipment_name(camera.findtext("maker", ""))
             model = _normalized_equipment_name(camera.findtext("model", ""))
             if wanted_make == make and wanted_camera == model:
-                base["camera_match"] = True
-                camera_mounts.update(
-                    mount.text.strip()
-                    for mount in camera.findall("mount")
-                    if mount.text and mount.text.strip()
-                )
-    base["camera_mounts"] = sorted(camera_mounts)
+                camera_matches.append(camera)
+    if len(camera_matches) > 1:
+        base["limitation"] = "Lensfun camera match is ambiguous across duplicate entries"
+        return base
+    if not camera_matches:
+        return base
+    base["camera_match"] = True
+    base["camera_mounts"] = sorted(
+        {
+            mount.text.strip()
+            for mount in camera_matches[0].findall("mount")
+            if mount.text and mount.text.strip()
+        }
+    )
     normalized_camera_mounts = {
         _normalized_equipment_name(mount) for mount in base["camera_mounts"]
     }

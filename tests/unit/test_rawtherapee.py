@@ -552,6 +552,38 @@ def test_lensfun_support_reports_matches_without_claiming_application(tmp_path: 
     assert "does not report" in result["limitation"]
 
 
+def test_lensfun_support_rejects_ambiguous_camera_mounts(tmp_path: Path) -> None:
+    database = tmp_path / "lensfun"
+    database.mkdir()
+    (database / "ambiguous-camera.xml").write_text(
+        """<lensdatabase>
+<camera><maker>Sony</maker><model>ILCE-TEST</model><mount>Sony E</mount></camera>
+<camera><maker>Sony</maker><model>ILCE-TEST</model><mount>Legacy Mount</mount></camera>
+<lens><maker>Sigma</maker><model>Shared 24-70</model><mount>Sony E</mount>
+<calibration><distortion model="ptlens" focal="24" a="0" b="0" c="0"/></calibration>
+</lens>
+</lensdatabase>
+""",
+        encoding="utf-8",
+    )
+
+    result = inspect_lensfun_support(
+        {
+            "Make": "Sony",
+            "Model": "ILCE-TEST",
+            "LensMake": "Sigma",
+            "LensModel": "Shared 24-70",
+        },
+        database=database,
+    )
+
+    assert result["camera_match"] is False
+    assert result["camera_mounts"] == []
+    assert result["lens_match"] is False
+    assert result["supported"] == []
+    assert "camera match is ambiguous" in result["limitation"]
+
+
 def test_lensfun_support_uses_lens_maker_to_disambiguate_same_mount_models(
     tmp_path: Path,
 ) -> None:

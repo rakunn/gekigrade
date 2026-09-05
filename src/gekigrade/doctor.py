@@ -52,6 +52,14 @@ def _profile_status(path: Path) -> dict[str, str | bool | None]:
 
 
 def _rawtherapee_status() -> ToolStatus:
+    if RAWTHERAPEE_CLI.is_symlink():
+        return ToolStatus(
+            name="rawtherapee",
+            available=False,
+            path=None,
+            version=None,
+            install_hint="Install with: brew install --cask rawtherapee",
+        )
     version: str | None = None
     if RAWTHERAPEE_PLIST.is_file():
         try:

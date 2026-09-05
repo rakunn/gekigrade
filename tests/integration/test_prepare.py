@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
 import plistlib
 import shutil
 import subprocess
@@ -522,6 +523,53 @@ def test_prepare_removes_a_manifest_if_the_raw_changes_while_it_is_published(
         return manifest
 
     monkeypatch.setattr(prepare_module, "_artifact_manifest", build_manifest_then_change_source)
+
+    with pytest.raises(RawTherapeeError, match="changed while publishing"):
+        prepare_job(
+            source,
+            tmp_path / "raw-job",
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+    assert not (tmp_path / "raw-job/manifest.json").exists()
+
+
+def test_raw_source_match_rejects_a_fifo_without_hashing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fifo = tmp_path / "source.ARW"
+    os.mkfifo(fifo)
+    original_open = os.open
+
+    def guarded_open(path: Any, flags: int) -> int:
+        assert flags & os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            assert flags & os.O_NOFOLLOW
+        return original_open(path, flags)
+
+    def reject_hash(_: object) -> str:
+        raise AssertionError("FIFO must be rejected before hashing")
+
+    monkeypatch.setattr(os, "open", guarded_open)
+    monkeypatch.setattr(prepare_module, "_sha256_stream", reject_hash)
+
+    assert prepare_module._raw_source_matches(fifo, "not-a-real-digest") is False
+
+
+def test_prepare_removes_manifest_if_raw_disappears_while_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    original_manifest = prepare_module._artifact_manifest
+
+    def build_manifest_then_remove_source(
+        job: Path, metadata: dict[str, object], **profile_hashes: str
+    ) -> dict[str, object]:
+        manifest = original_manifest(job, metadata, **profile_hashes)
+        source.unlink()
+        return manifest
+
+    monkeypatch.setattr(prepare_module, "_artifact_manifest", build_manifest_then_remove_source)
 
     with pytest.raises(RawTherapeeError, match="changed while publishing"):
         prepare_job(

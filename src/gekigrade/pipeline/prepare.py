@@ -12,13 +12,13 @@ from PIL import Image, ImageDraw
 from gekigrade.adapters.imagemagick import make_preview, normalize_jpeg, normalize_profiled_tiff
 from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
-    LENSFUN_DATABASE,
     RAWTHERAPEE_CLI,
     RAWTHERAPEE_OUTPUT_PROFILE,
     RawTherapeeError,
     develop_raw,
     inspect_camera_input_profile,
     inspect_lensfun_support,
+    lensfun_database_for_executable,
 )
 from gekigrade.analysis.metrics import analyze_srgb
 from gekigrade.doctor import ACESCG_PROFILE, SRGB_PROFILE, build_doctor_report, sha256_file
@@ -299,7 +299,6 @@ def prepare_job(
     rawtherapee_executable: Path = RAWTHERAPEE_CLI,
     raw_profile: Path = DEFAULT_RAW_PROFILE,
     raw_output_profile: Path = RAWTHERAPEE_OUTPUT_PROFILE,
-    lensfun_database: Path = LENSFUN_DATABASE,
 ) -> Path:
     with source_path.open("rb") as stream:
         signature = stream.read(4)
@@ -321,6 +320,7 @@ def prepare_job(
     else:
         raw_work = job / "intermediate/rawtherapee"
         developed = raw_work / "developed.tif"
+        lensfun_database = lensfun_database_for_executable(rawtherapee_executable)
         camera_input_profile = inspect_camera_input_profile(
             source["capture_metadata"], executable=rawtherapee_executable
         )

@@ -112,7 +112,7 @@ print("fake ARW developed")
     )
     profile = tmp_path / "neutral.pp3"
     profile.write_text("[Version]\nAppVersion=5.13\nVersion=353\n", encoding="utf-8")
-    lensfun = tmp_path / "lensfun"
+    lensfun = rawtherapee.parent.parent / "Resources/share/lensfun"
     lensfun.mkdir()
     (lensfun / "mil-sony.xml").write_text(
         """<lensdatabase>
@@ -215,7 +215,6 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
         rawtherapee_executable=rawtherapee,
         raw_profile=profile,
         raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
-        lensfun_database=lensfun,
     )
 
     assert _sha256(source) == before
@@ -246,6 +245,7 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
     assert development["lens_correction"]["camera_match"] is True
     assert development["lens_correction"]["lens_match"] is True
     assert development["lens_correction"]["application_confirmed"] is False
+    assert development["lens_correction"]["database_path"] == str(lensfun)
     assert [
         Path(item["path"]).name for item in development["lens_correction"]["database_files"]
     ] == ["mil-sony.xml"]
@@ -260,7 +260,7 @@ def test_prepare_routes_arw_through_rawtherapee_into_the_working_contract(
 def test_prepare_rejects_a_raw_source_changed_after_inspection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source, exiftool, rawtherapee, profile, lensfun = _raw_test_dependencies(tmp_path)
+    source, exiftool, rawtherapee, profile, _ = _raw_test_dependencies(tmp_path)
 
     def create_job_then_change_source(source_path: Path, output_path: Path) -> Path:
         job = real_create_job_directory(source_path, output_path)
@@ -278,14 +278,13 @@ def test_prepare_rejects_a_raw_source_changed_after_inspection(
             rawtherapee_executable=rawtherapee,
             raw_profile=profile,
             raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
-            lensfun_database=lensfun,
         )
 
 
 def test_prepare_rechecks_the_raw_source_before_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source, exiftool, rawtherapee, profile, lensfun = _raw_test_dependencies(tmp_path)
+    source, exiftool, rawtherapee, profile, _ = _raw_test_dependencies(tmp_path)
 
     def make_preview_then_change_source(working: Path, preview: Path) -> None:
         real_make_preview(working, preview)
@@ -302,7 +301,6 @@ def test_prepare_rechecks_the_raw_source_before_success(
             rawtherapee_executable=rawtherapee,
             raw_profile=profile,
             raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
-            lensfun_database=lensfun,
         )
 
 
@@ -331,7 +329,6 @@ with pathlib.Path({str(lensfun_file)!r}).open("a", encoding="utf-8") as stream:
             rawtherapee_executable=rawtherapee,
             raw_profile=profile,
             raw_output_profile=Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc"),
-            lensfun_database=lensfun,
         )
 
 

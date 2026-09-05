@@ -141,6 +141,10 @@ def _camera_resource_paths(executable: Path) -> tuple[Path, Path, Path, Path]:
     return dcp_directory, icc_directory, aliases_path, camera_constants_path
 
 
+def lensfun_database_for_executable(executable: Path = RAWTHERAPEE_CLI) -> Path:
+    return executable.resolve(strict=False).parent.parent / "Resources/share/lensfun"
+
+
 def _load_json_object(path: Path, label: str) -> dict[object, object]:
     if path.is_symlink() or not path.is_file():
         raise RawTherapeeError(f"RawTherapee {label} is unavailable: {path}")

@@ -17,11 +17,11 @@ from PIL import Image
 
 from gekigrade.adapters.rawtherapee import (
     DEFAULT_RAW_PROFILE,
-    LENSFUN_DATABASE,
     RAWTHERAPEE_OUTPUT_PROFILE,
     SUPPORTED_RAWTHERAPEE_VERSION,
     inspect_camera_resources,
     inspect_lensfun_database,
+    lensfun_database_for_executable,
 )
 from gekigrade.adapters.tools import ExternalTool, ToolStatus, inspect_tool
 
@@ -143,7 +143,9 @@ def build_doctor_report(*, run_color_probe: bool = True) -> dict[str, Any]:
         "rawtherapee": _rawtherapee_status(),
     }
     camera_resources = inspect_camera_resources(executable=RAWTHERAPEE_CLI)
-    lensfun_database = inspect_lensfun_database(database=LENSFUN_DATABASE)
+    lensfun_database = inspect_lensfun_database(
+        database=lensfun_database_for_executable(RAWTHERAPEE_CLI)
+    )
     profiles = {
         "acescg": _profile_status(ACESCG_PROFILE),
         "srgb": _profile_status(SRGB_PROFILE),

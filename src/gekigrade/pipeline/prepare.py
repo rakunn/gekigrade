@@ -188,16 +188,17 @@ def _read_exiftool(
 
 
 def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("source must be a regular, non-symlink ARW")
-    if path.stat().st_size > MAX_SOURCE_BYTES:
+    if _source_signature(path) not in {b"II*\x00", b"MM\x00*"}:
+        raise ValueError("source does not have a TIFF-based RAW signature")
+    source_snapshot = _stable_regular_file_snapshot(path)
+    if source_snapshot is None:
+        raise ValueError("source must be a stable regular, non-symlink ARW")
+    source_sha256, source_size = source_snapshot
+    if source_size > MAX_SOURCE_BYTES:
         raise ValueError("ARW exceeds the 1 GiB safety limit")
-    with path.open("rb") as stream:
-        if stream.read(4) not in {b"II*\x00", b"MM\x00*"}:
-            raise ValueError("source does not have a TIFF-based RAW signature")
-    source_sha256 = sha256_file(path)
     metadata, metadata_reader = _read_exiftool(path, executable=exiftool_executable)
-    if sha256_file(path) != source_sha256:
+    after_metadata = _stable_regular_file_snapshot(path)
+    if after_metadata is None or after_metadata[0] != source_sha256:
         raise ValueError("source ARW changed during metadata inspection")
     if metadata.get("FileType") != "ARW" or metadata.get("MIMEType") != "image/x-sony-arw":
         raise ValueError("source metadata does not identify a Sony ARW")
@@ -251,10 +252,27 @@ def _inspect_raw(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[st
 
 
 def _source_signature(path: Path) -> bytes:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("source must be a regular, non-symlink file")
-    with path.open("rb") as stream:
-        return stream.read(4)
+    flags = os.O_RDONLY | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            opened_status = os.fstat(stream.fileno())
+            opened_identity = _file_identity(opened_status)
+            if not stat.S_ISREG(opened_status.st_mode):
+                raise OSError("source is not a regular file")
+            signature = stream.read(4)
+            closed_identity = _file_identity(os.fstat(stream.fileno()))
+        path_status = path.lstat()
+    except OSError as exc:
+        raise ValueError("source must be a regular, non-symlink file") from exc
+    if (
+        not stat.S_ISREG(path_status.st_mode)
+        or opened_identity != closed_identity
+        or _file_identity(path_status) != opened_identity
+    ):
+        raise ValueError("source changed during signature inspection")
+    return signature
 
 
 def inspect_photo(path: Path, *, exiftool_executable: Path = EXIFTOOL) -> dict[str, Any]:
@@ -373,7 +391,7 @@ def _artifact_matches(path: Path, expected_sha256: str) -> bool:
         return False
 
 
-def _raw_source_matches(path: Path, expected_sha256: str) -> bool:
+def _stable_regular_file_snapshot(path: Path) -> tuple[str, int] | None:
     flags = os.O_RDONLY | os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -382,17 +400,24 @@ def _raw_source_matches(path: Path, expected_sha256: str) -> bool:
             opened_status = os.fstat(stream.fileno())
             opened_identity = _file_identity(opened_status)
             if not stat.S_ISREG(opened_status.st_mode):
-                return False
+                return None
             actual_sha256 = _sha256_stream(stream)
             closed_identity = _file_identity(os.fstat(stream.fileno()))
         path_status = path.lstat()
     except OSError:
-        return False
-    return (
-        stat.S_ISREG(path_status.st_mode)
-        and opened_identity == closed_identity == _file_identity(path_status)
-        and actual_sha256 == expected_sha256
-    )
+        return None
+    if (
+        not stat.S_ISREG(path_status.st_mode)
+        or opened_identity != closed_identity
+        or _file_identity(path_status) != opened_identity
+    ):
+        return None
+    return actual_sha256, opened_status.st_size
+
+
+def _raw_source_matches(path: Path, expected_sha256: str) -> bool:
+    snapshot = _stable_regular_file_snapshot(path)
+    return snapshot is not None and snapshot[0] == expected_sha256
 
 
 def _orientation_axis_matches(expected: dict[str, int], actual: dict[str, int]) -> bool:

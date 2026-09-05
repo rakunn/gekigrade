@@ -982,6 +982,45 @@ print(json.dumps([metadata]))
         inspect_photo(source, exiftool_executable=exiftool)
 
 
+def test_inspect_rejects_a_raw_source_replaced_by_symlink_during_metadata_read(
+    tmp_path: Path,
+) -> None:
+    source, _, _, _ = _raw_test_dependencies(tmp_path)
+    replacement = tmp_path / "replacement.ARW"
+    shutil.copyfile(source, replacement)
+    exiftool = _write_executable(
+        tmp_path / "replacing-exiftool",
+        f"""#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+
+if sys.argv[1:] == ["-config", "", "-ver"]:
+    print("13.55")
+    raise SystemExit
+
+path = pathlib.Path(sys.argv[-1])
+metadata = {{
+    "SourceFile": str(path),
+    "FileType": "ARW",
+    "MIMEType": "image/x-sony-arw",
+    "ImageWidth": 180,
+    "ImageHeight": 120,
+    "Orientation": 1,
+    "Make": "SONY",
+    "Model": "ILCE-TEST"
+}}
+path.unlink()
+path.symlink_to(pathlib.Path({str(replacement)!r}))
+print(json.dumps([metadata]))
+""",
+    )
+
+    with pytest.raises(ValueError, match="changed during metadata inspection"):
+        inspect_photo(source, exiftool_executable=exiftool)
+    assert source.is_symlink()
+
+
 def test_inspect_rejects_an_exiftool_binary_changed_during_metadata_read(tmp_path: Path) -> None:
     source, _, _, _ = _raw_test_dependencies(tmp_path)
     exiftool = _write_executable(

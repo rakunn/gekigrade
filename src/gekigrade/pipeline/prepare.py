@@ -34,6 +34,7 @@ from gekigrade.adapters.rawtherapee import (
     inspect_lensfun_support,
     lensfun_database_for_executable,
     path_has_symlink,
+    rawtherapee_bundle_has_symlink,
     rawtherapee_output_profile_for_executable,
 )
 from gekigrade.analysis.metrics import analyze_srgb
@@ -659,6 +660,8 @@ def prepare_job(
     inspected_oriented_dimensions = dict(source["oriented_dimensions"])
     if source_format == "ARW" and path_has_symlink(rawtherapee_executable):
         raise RawTherapeeError("RawTherapee CLI has a symlinked path component")
+    if source_format == "ARW" and rawtherapee_bundle_has_symlink(rawtherapee_executable):
+        raise RawTherapeeError("RawTherapee application bundle contains symlinks")
     if source_format == "ARW" and (
         DEFAULT_RAW_PROFILE.is_symlink()
         or not DEFAULT_RAW_PROFILE.is_file()

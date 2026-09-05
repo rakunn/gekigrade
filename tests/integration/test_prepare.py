@@ -506,6 +506,27 @@ def test_prepare_rejects_a_symlinked_rawtherapee_bundle_before_creating_job(
     assert not job.exists()
 
 
+def test_prepare_rejects_an_internal_bundle_symlink_before_creating_job(
+    tmp_path: Path,
+) -> None:
+    source, exiftool, rawtherapee, _ = _raw_test_dependencies(tmp_path)
+    external = tmp_path / "external-resource"
+    external.write_text("external", encoding="utf-8")
+    unrelated = rawtherapee.parents[2] / "Contents/Resources/unrelated-link"
+    unrelated.symlink_to(external)
+    job = tmp_path / "raw-job"
+
+    with pytest.raises(RawTherapeeError, match="application bundle contains symlinks"):
+        prepare_job(
+            source,
+            job,
+            exiftool_executable=exiftool,
+            rawtherapee_executable=rawtherapee,
+        )
+
+    assert not job.exists()
+
+
 def test_prepare_rejects_a_modified_shipped_raw_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

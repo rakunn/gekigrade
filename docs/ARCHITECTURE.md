@@ -39,7 +39,7 @@ JPEG input is oriented and transformed directly to linear ACEScg. Sony ARW input
 
 ## Edit-plan boundary
 
-Plans contain a schema version, source hash, and exactly three recipes. Each recipe references allowlisted operation fields, a known look ID/version, and a prepared crop ID. Pydantic performs structural validation; job-aware validation resolves crop and look references and checks the source hash. Unknown fields are forbidden. No plan value reaches a shell or becomes a path.
+Plans contain a schema version, source hash, and exactly three recipes. Each recipe references allowlisted operation fields, a known look ID/version, and a prepared crop ID. Preparation emits the original frame plus deterministic left/center/right or top/center/bottom anchors for each requested social aspect, using normalized coordinates tied to exact reference-pixel bounds. Pydantic performs structural validation; job-aware validation resolves crop and look references and checks the source hash. Social export validates the crop's declared aspect purpose rather than privileging a center anchor. Unknown fields are forbidden. No plan value reaches a shell or becomes a path.
 
 ## Data formats
 

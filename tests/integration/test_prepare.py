@@ -176,6 +176,9 @@ def test_prepare_builds_a_complete_oriented_profiled_job_without_touching_source
     with Image.open(job / "intermediate/working.tif") as working:
         assert working.size == (240, 320)
         assert working.info.get("icc_profile")
+    with Image.open(job / "crops/contact-sheet.jpg") as contact_sheet:
+        assert contact_sheet.size == (1000, 2050)
+        assert contact_sheet.info.get("icc_profile")
     identify = subprocess.run(
         [
             "/opt/homebrew/bin/magick",

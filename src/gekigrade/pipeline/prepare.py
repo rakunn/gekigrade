@@ -600,9 +600,11 @@ def _contact_sheet(preview_path: Path, candidates: list[dict[str, Any]], target:
         cell.paste(crop, ((500 - crop.width) // 2, 28 + (360 - crop.height) // 2))
         ImageDraw.Draw(cell).text((12, 8), f"{index}. {candidate['id']}", fill="white")
         cells.append(cell)
-    sheet = Image.new("RGB", (1000, 820), "#101010")
+    columns = 2
+    rows = (len(cells) + columns - 1) // columns
+    sheet = Image.new("RGB", (columns * 500, rows * 410), "#101010")
     for index, cell in enumerate(cells):
-        sheet.paste(cell, ((index % 2) * 500, (index // 2) * 410))
+        sheet.paste(cell, ((index % columns) * 500, (index // columns) * 410))
     sheet.save(target, quality=92, subsampling=0, icc_profile=profile)
 
 

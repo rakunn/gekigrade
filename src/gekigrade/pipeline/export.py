@@ -81,13 +81,15 @@ def export_job(
     candidate = next(item for item in plan.candidates if item.id == selection["candidate_id"])
     if candidate.model_dump(mode="json") != candidate_data:
         raise ValueError("selected candidate metadata no longer matches the validated plan")
+    crops = _crop_map(job)
+    selected_crop = crops[candidate.crop_id]
     dimensions: tuple[int, int] | None
     if preset == "instagram-feed":
-        if candidate.crop_id != "feed-4x5-center":
+        if selected_crop["aspect_label"] != "instagram-feed-4x5":
             raise ValueError("instagram-feed export requires a selected 4:5 crop")
         dimensions = (1080, 1350)
     elif preset == "instagram-story":
-        if candidate.crop_id != "story-9x16-center":
+        if selected_crop["aspect_label"] != "instagram-story-9x16":
             raise ValueError("instagram-story export requires a selected 9:16 crop")
         dimensions = (1080, 1920)
     elif preset == "full-quality":
@@ -95,10 +97,7 @@ def export_job(
     else:
         raise ValueError(f"unknown export preset: {preset}")
     working = read_linear_image(str(job_child(job, "intermediate/working.tif")))
-    crops = _crop_map(job)
-    pixels, qa = evaluate_candidate(
-        working, candidate, crops[candidate.crop_id], target_dimensions=dimensions
-    )
+    pixels, qa = evaluate_candidate(working, candidate, selected_crop, target_dimensions=dimensions)
     output = job_child(job, f"output/{preset}.jpg")
     source: dict[str, Any] = read_json(job_child(job, "source.json"))
     exif = _safe_exif(source) if metadata_policy == "safe" else None

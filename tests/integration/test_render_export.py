@@ -83,6 +83,8 @@ def test_export_uses_the_plan_that_was_rendered_not_a_hardcoded_example(
     job = prepare_job(tagged_oriented_jpeg, tmp_path / "job")
     plan = json.loads((job / "plans/example-plan.json").read_text(encoding="utf-8"))
     plan["candidates"][0]["exposure_ev"] = 0.15
+    for candidate in plan["candidates"]:
+        candidate["crop_id"] = "feed-4x5-top"
     custom = tmp_path / "custom-plan.json"
     custom.write_text(json.dumps(plan), encoding="utf-8")
 
@@ -99,7 +101,7 @@ def test_full_quality_and_supported_story_exports_use_selected_crop(
     job = prepare_job(tagged_oriented_jpeg, tmp_path / "job")
     plan = json.loads((job / "plans/example-plan.json").read_text(encoding="utf-8"))
     for candidate in plan["candidates"]:
-        candidate["crop_id"] = "story-9x16-center"
+        candidate["crop_id"] = "story-9x16-right"
         candidate["rotation_degrees"] = 1.25
     story_plan = tmp_path / "story-plan.json"
     story_plan.write_text(json.dumps(plan), encoding="utf-8")
@@ -116,3 +118,19 @@ def test_full_quality_and_supported_story_exports_use_selected_crop(
     with Image.open(story) as image:
         assert image.size == (1080, 1920)
         assert image.info.get("icc_profile")
+
+
+def test_social_export_rejects_a_crop_with_the_wrong_aspect_purpose(
+    tagged_oriented_jpeg: Path, tmp_path: Path
+) -> None:
+    job = prepare_job(tagged_oriented_jpeg, tmp_path / "job")
+    plan = json.loads((job / "plans/example-plan.json").read_text(encoding="utf-8"))
+    for candidate in plan["candidates"]:
+        candidate["crop_id"] = "square-1x1-top"
+    square_plan = tmp_path / "square-plan.json"
+    square_plan.write_text(json.dumps(plan), encoding="utf-8")
+    render_job(job, square_plan)
+    select_candidate(job, "01-natural-clean")
+
+    with pytest.raises(ValueError, match="requires a selected 4:5 crop"):
+        export_job(job, preset="instagram-feed")

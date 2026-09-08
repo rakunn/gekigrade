@@ -12,7 +12,7 @@ from gekigrade.doctor import SRGB_PROFILE
 from gekigrade.domain.jsonio import canonical_json_bytes, read_json, write_json
 from gekigrade.domain.models import CandidateRecipe, EditPlan
 from gekigrade.domain.paths import job_child
-from gekigrade.geometry.crops import generate_crop_candidates
+from gekigrade.geometry.crops import CROP_SCHEMA_VERSION, generate_crop_candidates
 from gekigrade.grading.engine import (
     apply_recipe,
     crop_normalized,
@@ -32,20 +32,24 @@ class PlanValidationError(ValueError):
 PRECLAMP_WARNING_PERCENT = 1.0
 
 
-def _crop_map(job: Path) -> dict[str, dict[str, Any]]:
+def _crop_map(job: Path, *, working_dimensions: tuple[int, int]) -> dict[str, dict[str, Any]]:
     try:
-        source = read_json(job_child(job, "source.json"))
-        dimensions = source["oriented_dimensions"]
+        width, height = working_dimensions
         expected = {
-            "schema_version": "1.0.0",
-            "candidates": generate_crop_candidates(
-                int(dimensions["width"]), int(dimensions["height"])
-            ),
+            "schema_version": CROP_SCHEMA_VERSION,
+            "candidates": generate_crop_candidates(width, height),
         }
         document = read_json(job_child(job, "crops/candidates.json"))
+        if not isinstance(document, dict):
+            raise PlanValidationError("prepared crop candidates must be a JSON object")
+        if document.get("schema_version") != CROP_SCHEMA_VERSION:
+            raise PlanValidationError(
+                "unsupported crop candidate schema version: "
+                f"{document.get('schema_version')!r}; re-run prepare"
+            )
         if document != expected:
             raise PlanValidationError(
-                "prepared crop candidates do not match deterministic source geometry"
+                "prepared crop candidates do not match deterministic working-image geometry"
             )
         return {candidate["id"]: candidate for candidate in document["candidates"]}
     except PlanValidationError:
@@ -54,19 +58,35 @@ def _crop_map(job: Path) -> dict[str, dict[str, Any]]:
         raise PlanValidationError("prepared crop candidates are invalid") from exc
 
 
-def validate_plan_for_job(job: Path, plan_path: Path) -> EditPlan:
+def validate_plan_for_job(
+    job: Path,
+    plan_path: Path,
+    *,
+    working_dimensions: tuple[int, int] | None = None,
+) -> EditPlan:
     try:
         plan = EditPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
     except (OSError, ValidationError) as exc:
         raise PlanValidationError(f"plan schema validation failed: {exc}") from exc
-    return validate_plan_model_for_job(job, plan)
+    return validate_plan_model_for_job(job, plan, working_dimensions=working_dimensions)
 
 
-def validate_plan_model_for_job(job: Path, plan: EditPlan) -> EditPlan:
+def validate_plan_model_for_job(
+    job: Path,
+    plan: EditPlan,
+    *,
+    working_dimensions: tuple[int, int] | None = None,
+) -> EditPlan:
     manifest = assert_source_unchanged(job)
     if plan.source_sha256 != manifest["source_sha256"]:
         raise PlanValidationError("plan source checksum does not match the prepared job")
-    crops = _crop_map(job)
+    if working_dimensions is None:
+        try:
+            working = read_linear_image(str(job_child(job, "intermediate/working.tif")))
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise PlanValidationError(f"working image validation failed: {exc}") from exc
+        working_dimensions = (working.shape[1], working.shape[0])
+    crops = _crop_map(job, working_dimensions=working_dimensions)
     for candidate in plan.candidates:
         if candidate.crop_id not in crops:
             raise PlanValidationError(f"unknown crop: {candidate.crop_id}")
@@ -165,9 +185,11 @@ def _candidate_contact_sheet(paths: list[Path], target: Path) -> None:
 
 def render_job(job_path: Path, plan_path: Path) -> Path:
     job = job_path.resolve(strict=True)
-    plan = validate_plan_for_job(job, plan_path)
-    crops = _crop_map(job)
+    assert_source_unchanged(job)
     working = read_linear_image(str(job_child(job, "intermediate/working.tif")))
+    working_dimensions = (working.shape[1], working.shape[0])
+    plan = validate_plan_for_job(job, plan_path, working_dimensions=working_dimensions)
+    crops = _crop_map(job, working_dimensions=working_dimensions)
     outputs: list[Path] = []
     qa_candidates: dict[str, Any] = {}
     metadata_candidates: dict[str, Any] = {}

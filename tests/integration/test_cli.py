@@ -68,6 +68,21 @@ def test_cli_uses_nonzero_exit_for_invalid_plan(tmp_path: Path) -> None:
     assert "validation" in result.output.lower()
 
 
+def test_validate_plan_cli_reports_a_corrupt_working_image(
+    tagged_oriented_jpeg: Path, tmp_path: Path
+) -> None:
+    job = tmp_path / "corrupt-working-job"
+    prepared = runner.invoke(app, ["prepare", str(tagged_oriented_jpeg), "--output", str(job)])
+    assert prepared.exit_code == 0, prepared.output
+    (job / "intermediate/working.tif").write_bytes(b"not-a-tiff")
+
+    result = runner.invoke(app, ["validate-plan", str(job / "plans/example-plan.json")])
+
+    assert result.exit_code != 0
+    assert "working image validation failed" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_cli_inspect_uses_the_format_agnostic_inspector(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:

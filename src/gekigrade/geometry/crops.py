@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 Anchor = Literal["left", "center", "right", "top", "bottom"]
 TrimAxis = Literal["horizontal", "vertical", "none"]
+CROP_SCHEMA_VERSION = "2.0.0"
 
 
 def _crop_dimensions(width: int, height: int, target_ratio: float) -> tuple[int, int]:

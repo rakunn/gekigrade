@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from gekigrade.geometry.crops import CROP_SCHEMA_VERSION, generate_crop_candidates
 from gekigrade.pipeline.export import export_job, select_candidate
 from gekigrade.pipeline.prepare import prepare_job
 from gekigrade.pipeline.render import PlanValidationError, render_job, validate_plan_for_job
@@ -154,6 +155,61 @@ def test_export_rejects_corrupted_prepared_crop_geometry(
 
     with pytest.raises(
         PlanValidationError,
-        match="crop candidates do not match deterministic source geometry",
+        match="crop candidates do not match deterministic working-image geometry",
     ):
         export_job(job, preset="instagram-feed")
+
+
+def test_export_binds_regenerated_crops_to_loaded_working_dimensions(
+    tagged_oriented_jpeg: Path, tmp_path: Path
+) -> None:
+    job = prepare_job(tagged_oriented_jpeg, tmp_path / "job")
+    plan = job / "plans/example-plan.json"
+    render_job(job, plan)
+    select_candidate(job, "01-natural-clean")
+
+    source_path = job / "source.json"
+    source = json.loads(source_path.read_text(encoding="utf-8"))
+    source["oriented_dimensions"] = {"width": 400, "height": 300}
+    source_path.write_text(json.dumps(source), encoding="utf-8")
+    crops = {
+        "schema_version": CROP_SCHEMA_VERSION,
+        "candidates": generate_crop_candidates(400, 300),
+    }
+    (job / "crops/candidates.json").write_text(json.dumps(crops), encoding="utf-8")
+
+    with pytest.raises(
+        PlanValidationError,
+        match="crop candidates do not match deterministic working-image geometry",
+    ):
+        export_job(job, preset="instagram-feed")
+
+
+def test_old_crop_schema_requires_job_repreparation(
+    tagged_oriented_jpeg: Path, tmp_path: Path
+) -> None:
+    job = prepare_job(tagged_oriented_jpeg, tmp_path / "job")
+    crops_path = job / "crops/candidates.json"
+    crops = json.loads(crops_path.read_text(encoding="utf-8"))
+    crops["schema_version"] = "1.0.0"
+    crops_path.write_text(json.dumps(crops), encoding="utf-8")
+
+    with pytest.raises(
+        PlanValidationError,
+        match=r"unsupported crop candidate schema version.*re-run prepare",
+    ):
+        validate_plan_for_job(job, job / "plans/example-plan.json")
+
+
+@pytest.mark.parametrize("malformed_root", [[], None, "not-an-object"])
+def test_crop_document_requires_an_object_root(
+    tagged_oriented_jpeg: Path, tmp_path: Path, malformed_root: object
+) -> None:
+    job = prepare_job(tagged_oriented_jpeg, tmp_path / "job")
+    (job / "crops/candidates.json").write_text(json.dumps(malformed_root), encoding="utf-8")
+
+    with pytest.raises(
+        PlanValidationError,
+        match="crop candidates must be a JSON object",
+    ):
+        validate_plan_for_job(job, job / "plans/example-plan.json")

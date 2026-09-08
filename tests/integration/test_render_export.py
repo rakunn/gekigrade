@@ -134,3 +134,26 @@ def test_social_export_rejects_a_crop_with_the_wrong_aspect_purpose(
 
     with pytest.raises(ValueError, match="requires a selected 4:5 crop"):
         export_job(job, preset="instagram-feed")
+
+
+def test_export_rejects_corrupted_prepared_crop_geometry(
+    tagged_oriented_jpeg: Path, tmp_path: Path
+) -> None:
+    job = prepare_job(tagged_oriented_jpeg, tmp_path / "job")
+    plan = job / "plans/example-plan.json"
+    render_job(job, plan)
+    select_candidate(job, "01-natural-clean")
+
+    crops_path = job / "crops/candidates.json"
+    crops = json.loads(crops_path.read_text(encoding="utf-8"))
+    selected = next(
+        candidate for candidate in crops["candidates"] if candidate["id"] == "feed-4x5-center"
+    )
+    selected["width"] = 0.5
+    crops_path.write_text(json.dumps(crops), encoding="utf-8")
+
+    with pytest.raises(
+        PlanValidationError,
+        match="crop candidates do not match deterministic source geometry",
+    ):
+        export_job(job, preset="instagram-feed")

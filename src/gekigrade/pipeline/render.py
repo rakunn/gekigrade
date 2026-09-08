@@ -12,6 +12,7 @@ from gekigrade.doctor import SRGB_PROFILE
 from gekigrade.domain.jsonio import canonical_json_bytes, read_json, write_json
 from gekigrade.domain.models import CandidateRecipe, EditPlan
 from gekigrade.domain.paths import job_child
+from gekigrade.geometry.crops import generate_crop_candidates
 from gekigrade.grading.engine import (
     apply_recipe,
     crop_normalized,
@@ -32,8 +33,25 @@ PRECLAMP_WARNING_PERCENT = 1.0
 
 
 def _crop_map(job: Path) -> dict[str, dict[str, Any]]:
-    document = read_json(job_child(job, "crops/candidates.json"))
-    return {candidate["id"]: candidate for candidate in document["candidates"]}
+    try:
+        source = read_json(job_child(job, "source.json"))
+        dimensions = source["oriented_dimensions"]
+        expected = {
+            "schema_version": "1.0.0",
+            "candidates": generate_crop_candidates(
+                int(dimensions["width"]), int(dimensions["height"])
+            ),
+        }
+        document = read_json(job_child(job, "crops/candidates.json"))
+        if document != expected:
+            raise PlanValidationError(
+                "prepared crop candidates do not match deterministic source geometry"
+            )
+        return {candidate["id"]: candidate for candidate in document["candidates"]}
+    except PlanValidationError:
+        raise
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        raise PlanValidationError("prepared crop candidates are invalid") from exc
 
 
 def validate_plan_for_job(job: Path, plan_path: Path) -> EditPlan:

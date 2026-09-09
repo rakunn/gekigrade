@@ -57,7 +57,7 @@ from gekigrade.doctor import EXIFTOOL_ENVIRONMENT as DOCTOR_EXIFTOOL_ENVIRONMENT
 from gekigrade.domain.jsonio import canonical_json_bytes, write_json
 from gekigrade.domain.models import EditPlan
 from gekigrade.domain.paths import create_job_directory
-from gekigrade.geometry.crops import generate_crop_candidates
+from gekigrade.geometry.crops import CROP_SCHEMA_VERSION, generate_crop_candidates
 from gekigrade.grading.looks import looks_as_json
 
 MAX_SOURCE_BYTES = 1024 * 1024 * 1024
@@ -600,9 +600,11 @@ def _contact_sheet(preview_path: Path, candidates: list[dict[str, Any]], target:
         cell.paste(crop, ((500 - crop.width) // 2, 28 + (360 - crop.height) // 2))
         ImageDraw.Draw(cell).text((12, 8), f"{index}. {candidate['id']}", fill="white")
         cells.append(cell)
-    sheet = Image.new("RGB", (1000, 820), "#101010")
+    columns = 2
+    rows = (len(cells) + columns - 1) // columns
+    sheet = Image.new("RGB", (columns * 500, rows * 410), "#101010")
     for index, cell in enumerate(cells):
-        sheet.paste(cell, ((index % 2) * 500, (index // 2) * 410))
+        sheet.paste(cell, ((index % columns) * 500, (index // columns) * 410))
     sheet.save(target, quality=92, subsampling=0, icc_profile=profile)
 
 
@@ -963,7 +965,10 @@ def prepare_job(
     source_json_sha256 = hashlib.sha256(canonical_json_bytes(source)).hexdigest()
     write_json(source_json_path, source)
     write_json(job / "analysis.json", analysis)
-    write_json(job / "crops/candidates.json", {"schema_version": "1.0.0", "candidates": candidates})
+    write_json(
+        job / "crops/candidates.json",
+        {"schema_version": CROP_SCHEMA_VERSION, "candidates": candidates},
+    )
     _contact_sheet(preview, candidates, job / "crops/contact-sheet.jpg")
     write_json(job / "plans/example-plan.json", _example_plan(source["source_sha256"]))
     write_json(job / "looks.json", {"schema_version": "1.0.0", "looks": looks_as_json()})

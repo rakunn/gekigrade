@@ -14,7 +14,7 @@ Status: adapter implemented; compatibility and repeat-pixel determinism verified
 
 ## Milestone 3 — geometry and crop evaluation
 
-Evaluate more crop candidates, optional reliable horizon assistance, and perspective correction. Acceptance requires preview/full coordinate equivalence and visual review on real images.
+Status: deterministic anchor alternatives implemented. For each social aspect, preparation emits left/center/right candidates when width is trimmed or top/center/bottom candidates when height is trimmed; exact pixel bounds and normalized coordinates share the existing preview/full evaluator. Real-photo composition review remains pending. Horizon assistance and perspective correction remain deferred until they can be implemented and evaluated reliably. Acceptance requires preview/full coordinate equivalence and visual review on real images.
 
 ## Milestone 4 — curated-look evaluation
 

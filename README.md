@@ -6,7 +6,7 @@ GekiGrade is not a generative editor. It does not fill, outpaint, replace skies,
 
 ## Status
 
-The supported vertical slice is one JPEG or Sony ARW per job on Apple Silicon macOS. It prepares technical artifacts, validates a versioned edit plan, renders three candidates, records an explicit selection, and exports color-managed sRGB JPEGs. The RAW adapter has been compatibility- and determinism-tested with one private user-owned Sony ILCE-7RM5 file; this is not a general RAW-quality claim.
+The supported vertical slice is one JPEG or Sony ARW per job on Apple Silicon macOS. It prepares technical artifacts and deterministic edge/center crop alternatives, validates a versioned edit plan, renders three candidates, records an explicit selection, and exports color-managed sRGB JPEGs. The RAW adapter has been compatibility- and determinism-tested with one private user-owned Sony ILCE-7RM5 file; this is not a general RAW-quality claim.
 
 ## Architecture
 
@@ -67,6 +67,7 @@ uv run geki prepare /path/to/photo.ARW --output work/photo-raw
 - Pixel identity is guaranteed only for an identical tool, profile, configuration, architecture, and thread fingerprint. Cross-platform conformance uses a documented tolerance.
 - One Sony ILCE-7RM5/FE 24–70mm F2.8 GM II file is confirmed compatible. Its bundled Lensfun entry contains distortion but not vignetting calibration, and RawTherapee does not report actual application. GekiGrade records requested, supported, and confirmed states separately.
 - RAW EXIF orientation 1 is accepted. Orientations 2–8 are rejected until the pipeline can verify the complete pixel transform, including rotation direction and mirroring, rather than infer it from dimensions.
+- Crop alternatives are geometric left/center/right or top/center/bottom anchors. They do not detect subjects, faces, horizons, or perspective, and their composition quality still requires human review.
 - General RAW quality, paired camera-JPEG fidelity, perspective correction, semantic masking, publishing, API orchestration, and desktop UI remain unproven or deferred.
 
 See [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) for selection and licensing details and [`docs/RAW_MANUAL_TEST.md`](docs/RAW_MANUAL_TEST.md) for the executed ARW compatibility procedure and remaining visual checks.

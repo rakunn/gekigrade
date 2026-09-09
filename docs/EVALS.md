@@ -66,6 +66,16 @@ Score 1–5 for exposure, white balance or post-development color adaptation, hi
 
 The eventual set should contain approximately 20–30 user-owned photos spanning portraits, travel/lifestyle, landscapes, backlit scenes, high dynamic range, low light, imperfect JPEGs, and permitted RAW/JPEG pairs. Store hashes and private locations in an untracked manifest. Never commit an evaluation image without explicit permission and provenance.
 
+## Running a photographic evaluation
+
+Record the scene categories, source and accepted working-image hashes, code revision, tool/profile fingerprints, exact validated plans, output dimensions, encoder settings, and actual decoded-JPEG measurements. Preserve existing prepared artifacts; write comparisons and reports into a new ignored evaluation directory. Recheck source and working-image hashes after the run. Multiple crops or recipes from one photograph still count as one scene.
+
+Separate comparisons by purpose. Review all geometric crop anchors against the unchanged prepared preview. Compare the three curated looks with the same crop and global controls. Compare shadow strengths with the same look, exposure, and other controls. If using a neutral render or an operator-only baseline, label it as a derived reference rather than an unchanged source or trusted manual edit. Grade the full accepted working image before crop and output resizing when reporting production-output metrics.
+
+Record objective QA separately from visual judgments. Label the reviewer and view size for every visual assessment; a model's provisional score is not a human preference score. Use the 1–5 rubric above, with 1 meaning unacceptable, 3 usable with reservations, and 5 excellent for the stated intent. Mark inapplicable or unassessable categories as such rather than assigning a midpoint. Keep owner preferences and reference comparisons pending until they are actually supplied. Low clipping alone does not establish photographic quality, and a change in image texture is not a calibrated noise measurement.
+
+Compare matched output dimensions and scopes. Keep post-look, pre-gamut, pre-clamp, and decoded-JPEG results distinct. Repeat at least one identical recipe independently and compare integer, file, and decoded-pixel hashes. Inspect final outputs as well as contact sheets before recommending a candidate; a single-scene pilot cannot satisfy the diverse-set acceptance gate or justify changing global defaults.
+
 ## Regression policy
 
 Pinned-environment changes require exact decoded-pixel comparisons for programmatic fixtures. Intentional operation or tool upgrades require a decision entry, new baselines, technical diff metrics, and visual review on the private set. A test update alone cannot justify a changed image.
@@ -81,3 +91,5 @@ Pinned-environment changes require exact decoded-pixel comparisons for programma
 - A full-size private RAW A/B must preserve the source hash, use the same accepted working pixels, recipe crop/look/non-tone settings, target size, and encoder settings, and retain all source paths, photos, and derived outputs in ignored local storage. Re-develop through the pinned adapter when available and compare the intermediate to the prior accepted artifact. Repeat the new output exactly. Report technical stage changes and honest visual findings, including regressions or uncertainty; synthetic fixtures alone cannot justify quality claims.
 
 The executed operator comparison and one-scene result are in [`TONE_EXPERIMENT.md`](TONE_EXPERIMENT.md). The broader 20–30-image evaluation and user preference scoring remain open.
+
+The subsequent private photo-screening and controlled comparison report is [`REAL_PHOTO_EVALUATION.md`](REAL_PHOTO_EVALUATION.md). It distinguishes supported inputs, measured render outcomes, provisional model judgments, and the remaining acceptance gaps.

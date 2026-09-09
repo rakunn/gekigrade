@@ -6,7 +6,7 @@ GekiGrade is not a generative editor. It does not fill, outpaint, replace skies,
 
 ## Status
 
-The supported vertical slice is one JPEG or Sony ARW per job on Apple Silicon macOS. It prepares technical artifacts and deterministic edge/center crop alternatives, validates a versioned edit plan, renders three candidates, records an explicit selection, and exports color-managed sRGB JPEGs. The RAW adapter has been compatibility- and determinism-tested with one private user-owned Sony ILCE-7RM5 file; this is not a general RAW-quality claim.
+The supported vertical slice is one JPEG or Sony ARW per job on Apple Silicon macOS. It prepares technical artifacts and deterministic edge/center crop alternatives, validates a versioned edit plan, renders three candidates, records an explicit selection, and exports color-managed sRGB JPEGs. Private compatibility evaluation now covers 15 normal-orientation Sony ILCE-7RM5 files from one camera/lens combination; independent development repeatability was checked on the original pilot. This is not a general RAW-quality claim.
 
 ## Architecture
 
@@ -63,14 +63,14 @@ uv run geki prepare /path/to/photo.ARW --output work/photo-raw
 
 - Milestone 1 is macOS-first because it uses the operating system's ACEScg and sRGB ICC profiles and records their hashes rather than redistributing Apple assets.
 - JPEGs without an embedded profile are explicitly assumed to be sRGB; unprofiled CMYK JPEGs are rejected.
-- The initial looks are restrained engineering defaults. Their photographic quality has not been established on real user photographs.
+- The initial looks are restrained engineering defaults. A private real-photo comparison now has provisional model assessments, but human preference and broader photographic-quality acceptance remain pending.
 - Pixel identity is guaranteed only for an identical tool, profile, configuration, architecture, and thread fingerprint. Cross-platform conformance uses a documented tolerance.
-- One Sony ILCE-7RM5/FE 24–70mm F2.8 GM II file is confirmed compatible. Its bundled Lensfun entry contains distortion but not vignetting calibration, and RawTherapee does not report actual application. GekiGrade records requested, supported, and confirmed states separately.
+- Fifteen normal-orientation Sony ILCE-7RM5/FE 24–70mm F2.8 GM II files passed the private compatibility run. This camera/lens combination's bundled Lensfun entry contains distortion but not vignetting calibration, and RawTherapee does not report actual application. GekiGrade records requested, supported, and confirmed states separately.
 - RAW EXIF orientation 1 is accepted. Orientations 2–8 are rejected until the pipeline can verify the complete pixel transform, including rotation direction and mirroring, rather than infer it from dimensions.
 - Crop alternatives are geometric left/center/right or top/center/bottom anchors. They do not detect subjects, faces, horizons, or perspective, and their composition quality still requires human review.
 - General RAW quality, paired camera-JPEG fidelity, perspective correction, semantic masking, publishing, API orchestration, and desktop UI remain unproven or deferred.
 
-See [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) for selection and licensing details and [`docs/RAW_MANUAL_TEST.md`](docs/RAW_MANUAL_TEST.md) for the executed ARW compatibility procedure and remaining visual checks.
+See [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) for selection and licensing details, [`docs/RAW_MANUAL_TEST.md`](docs/RAW_MANUAL_TEST.md) for the ARW compatibility procedure, and [`docs/REAL_PHOTO_EVALUATION.md`](docs/REAL_PHOTO_EVALUATION.md) for measured outcomes, provisional visual findings, and remaining acceptance gaps.
 
 ## Global tone controls and stage QA
 
@@ -84,4 +84,4 @@ uv run geki render work/sample --plan work/sample/plans/example-plan-v2.json
 uv run geki qa work/sample
 ```
 
-Inspect `qa/report.json`: correction, creative-look, pre-gamut, and pre-clamp measurements show where changes occur. Full-frame and cropped-output percentages have different denominators. Post-sharpening and decoded-JPEG clipping are measured separately. Gamut compression may trade saturation for fewer channel excursions and cannot retain out-of-range luminance; shadow recovery can amplify noise. Dark silhouettes can remain intentional. This slice has one private backlit RAW A/B evaluation, not general quality acceptance. See [the math and QA contract](docs/COLOR_PIPELINE.md) and [operator comparison](docs/TONE_EXPERIMENT.md).
+Inspect `qa/report.json`: correction, creative-look, pre-gamut, and pre-clamp measurements show where changes occur. Full-frame and cropped-output percentages have different denominators. Post-sharpening and decoded-JPEG clipping are measured separately. Gamut compression may trade saturation for fewer channel excursions and cannot retain out-of-range luminance; shadow recovery can amplify noise. Dark silhouettes can remain intentional. Evaluation includes a controlled backlit pilot and fixed-look comparisons on 14 additional private RAWs; general quality acceptance remains open. See [the math and QA contract](docs/COLOR_PIPELINE.md), [operator comparison](docs/TONE_EXPERIMENT.md), and [real-photo evaluation](docs/REAL_PHOTO_EVALUATION.md).

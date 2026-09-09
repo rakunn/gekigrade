@@ -47,6 +47,6 @@ The documented CLI workflow completes on the licensed project fixture; the sourc
 ## Assumptions and unresolved validation
 
 - macOS supplies usable ACEScg and sRGB profiles at known ColorSync paths.
-- One private Sony ILCE-7RM5 ARW confirms adapter compatibility and repeatability; a paired in-camera JPEG and trusted manual development are still required for quality evaluation.
-- Real-photo evaluation is required before making quality claims or tuning look defaults aggressively.
+- Private compatibility evaluation covers 15 normal-orientation Sony ILCE-7RM5 ARWs from one camera/lens combination, with independent development repeatability checked on the original pilot. Ten other sampled files were rejected for unsupported orientation. Paired in-camera JPEGs and trusted manual developments remain required for quality evaluation.
+- The [initial real-photo evaluation](REAL_PHOTO_EVALUATION.md) provides technical results and provisional model judgments. Diverse scene coverage and human preference remain required before general quality claims or aggressive look tuning.
 - Public distribution and repository licensing require a separate decision and dependency-notice review.

@@ -10,6 +10,7 @@ from gekigrade.analysis.metrics import analyze_srgb
 from gekigrade.domain.jsonio import read_json, write_json
 from gekigrade.domain.paths import job_child
 from gekigrade.pipeline.manifests import assert_source_unchanged, refresh_manifest
+from gekigrade.pipeline.render import current_report_warnings
 
 
 def run_qa(job_path: Path) -> Path:
@@ -19,7 +20,6 @@ def run_qa(job_path: Path) -> Path:
     report_path = job_child(job, "qa/report.json")
     report: dict[str, Any] = read_json(report_path)
     failures: list[str] = []
-    warnings: list[str] = list(report.get("warnings", []))
     verification: dict[str, Any] = {}
     for candidate_id, candidate in metadata["candidates"].items():
         path = job_child(job, candidate["output"])
@@ -34,10 +34,6 @@ def run_qa(job_path: Path) -> Path:
             failures.append(f"missing ICC profile: {candidate_id}")
         metrics = analyze_srgb(pixels)
         clipping = metrics["clipping"]
-        if clipping["shadow_all_percent"] > 1.0:
-            warnings.append(f"{candidate_id}: all-channel shadow clipping exceeds 1.0%")
-        if clipping["highlight_all_percent"] > 1.0:
-            warnings.append(f"{candidate_id}: all-channel highlight clipping exceeds 1.0%")
         verification[candidate_id] = {
             "icc_profile_embedded": profile_present,
             "dimensions": dimensions,
@@ -46,7 +42,7 @@ def run_qa(job_path: Path) -> Path:
         }
     report["verification"] = verification
     report["failures"] = failures
-    report["warnings"] = sorted(set(warnings))
+    report["warnings"] = current_report_warnings(report)
     report["passed"] = not failures
     write_json(report_path, report)
     refresh_manifest(

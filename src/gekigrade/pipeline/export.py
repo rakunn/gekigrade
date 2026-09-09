@@ -13,8 +13,8 @@ from gekigrade.grading.engine import read_linear_image
 from gekigrade.pipeline.manifests import assert_source_unchanged, refresh_manifest
 from gekigrade.pipeline.render import (
     _crop_map,
+    current_report_warnings,
     evaluate_candidate,
-    gamut_warnings,
     record_jpeg_qa,
     save_srgb_jpeg,
     validate_plan_model_for_job,
@@ -116,9 +116,7 @@ def export_job(
     report: dict[str, Any] = read_json(job_child(job, "qa/report.json"))
     report["schema_version"] = "2.0.0"
     report["exports"][preset] = qa
-    warnings: list[str] = list(report.get("warnings", []))
-    warnings.extend(gamut_warnings(preset, qa))
-    report["warnings"] = sorted(set(warnings))
+    report["warnings"] = current_report_warnings(report)
     write_json(job_child(job, "qa/report.json"), report)
     refresh_manifest(job, state="exported", plan_sha256=selection["plan_sha256"])
     return output

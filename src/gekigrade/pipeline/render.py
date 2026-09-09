@@ -183,16 +183,38 @@ def record_jpeg_qa(path: Path, qa: dict[str, Any]) -> None:
 
 def gamut_warnings(identifier: str, qa: dict[str, Any]) -> list[str]:
     warnings = []
-    for name, stage in qa["stages"].items():
+    for name, stage in qa.get("stages", {}).items():
         for side in ("low", "high"):
             if stage["out_of_gamut"][f"{side}_any_percent"] > PRECLAMP_WARNING_PERCENT:
                 warnings.append(
                     f"{identifier}: {name} {side}-gamut pixels exceed {PRECLAMP_WARNING_PERCENT}%"
                 )
+    if "stages" not in qa:
+        # Persisted version-1 reports have only these final-stage fields.
+        for side in ("low", "high"):
+            if qa.get(f"preclamp_{side}_percent", 0.0) > PRECLAMP_WARNING_PERCENT:
+                warnings.append(
+                    f"{identifier}: pre-clamp {side}-gamut pixels "
+                    f"exceed {PRECLAMP_WARNING_PERCENT}%"
+                )
+    clipping = qa.get("post_encode", {}).get("clipping", {})
     for tone in ("shadow", "highlight"):
-        if qa["post_encode"]["clipping"][f"{tone}_all_percent"] > 1.0:
+        if clipping.get(f"{tone}_all_percent", 0.0) > 1.0:
             warnings.append(f"{identifier}: post-encode all-channel {tone} clipping exceeds 1.0%")
     return warnings
+
+
+def current_report_warnings(report: dict[str, Any]) -> list[str]:
+    """Derive warnings from current artifacts, never from superseded output warnings."""
+    warnings = []
+    for group in ("candidates", "exports"):
+        for identifier, qa in report.get(group, {}).items():
+            warnings.extend(gamut_warnings(identifier, qa))
+    for identifier, verification in report.get("verification", {}).items():
+        for tone in ("shadow", "highlight"):
+            if verification.get("clipping", {}).get(f"{tone}_all_percent", 0.0) > 1.0:
+                warnings.append(f"{identifier}: all-channel {tone} clipping exceeds 1.0%")
+    return sorted(set(warnings))
 
 
 def save_srgb_jpeg(

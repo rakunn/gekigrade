@@ -78,3 +78,18 @@ def test_observation_does_not_change_pixels_and_stage_scopes_are_explicit(versio
 def test_stage_measurement_rejects_nonfinite(value: float) -> None:
     with pytest.raises(ValueError, match="finite"):
         measure_stage(np.full((1, 1, 3), value, dtype=np.float32))
+
+
+def test_warning_rebuild_retains_legacy_evidence_and_colliding_artifact_ids() -> None:
+    from gekigrade.pipeline.render import current_report_warnings
+
+    report = {
+        "warnings": ["instagram-feed: stale warning"],
+        "candidates": {"instagram-feed": {"preclamp_low_percent": 2.0}},
+        "exports": {"instagram-feed": {"preclamp_high_percent": 0.0}},
+        "verification": {"instagram-feed": {"clipping": {"shadow_all_percent": 3.0}}},
+    }
+    warnings = current_report_warnings(report)
+    assert "instagram-feed: stale warning" not in warnings
+    assert any("low-gamut" in warning for warning in warnings)
+    assert any("shadow clipping" in warning for warning in warnings)

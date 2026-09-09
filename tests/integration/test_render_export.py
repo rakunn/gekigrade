@@ -230,3 +230,44 @@ def test_crop_document_requires_an_object_root(
         match="crop candidates must be a JSON object",
     ):
         validate_plan_for_job(job, job / "plans/example-plan.json")
+
+
+def test_reexport_replaces_warnings_and_retains_other_current_artifacts(
+    tagged_oriented_jpeg: Path, tmp_path: Path
+) -> None:
+    job = prepare_job(tagged_oriented_jpeg, tmp_path / "job")
+    plan_path = job / "plans/example-plan.json"
+    plan = json.loads(plan_path.read_text())
+    for index, candidate in enumerate(plan["candidates"]):
+        candidate.update(
+            exposure_ev=2.0 if index == 0 else -2.0, highlight_rolloff=0.0, sharpen=0.0
+        )
+        candidate["look"]["strength"] = 0.0
+    plan_path.write_text(json.dumps(plan))
+    render_job(job, plan_path)
+    select_candidate(job, "01-natural-clean")
+    export_job(job, preset="instagram-feed", quality=50)
+    export_job(job, preset="full-quality", quality=50)
+    report = json.loads((job / "qa/report.json").read_text())
+    old_feed = [warning for warning in report["warnings"] if warning.startswith("instagram-feed:")]
+    retained = [
+        warning for warning in report["warnings"] if not warning.startswith("instagram-feed:")
+    ]
+    assert any("high-gamut" in warning for warning in old_feed)
+    assert any("post-encode all-channel highlight" in warning for warning in old_feed)
+    assert any(warning.startswith("full-quality:") for warning in retained)
+    assert any(warning.startswith("01-natural-clean:") for warning in retained)
+
+    select_candidate(job, "02-warm-editorial")
+    export_job(job, preset="instagram-feed", quality=95)
+    report = json.loads((job / "qa/report.json").read_text())
+    assert report["exports"]["instagram-feed"]["preclamp_high_percent"] == 0.0
+    assert (
+        report["exports"]["instagram-feed"]["post_encode"]["clipping"]["highlight_all_percent"]
+        == 0.0
+    )
+    assert not any(warning in report["warnings"] for warning in old_feed)
+    assert all(warning in report["warnings"] for warning in retained)
+    run_qa(job)
+    report = json.loads((job / "qa/report.json").read_text())
+    assert not any(warning in report["warnings"] for warning in old_feed)

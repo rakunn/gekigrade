@@ -25,3 +25,9 @@ The procedure was executed with one private user-owned Sony ILCE-7RM5 ARW captur
 - A visual inspection found the neutral development technically coherent but the default conservative recipe left the shaded foreground dark. This is a plan-tuning observation, not a RAW-development failure.
 
 Step 8 remains incomplete because no paired in-camera JPEG or trusted manual development was supplied. The adapter may be described as functional for this compatibility path, not as generally validated for Sony RAW quality.
+
+## 2026-09-09 follow-up
+
+A convenience sample of 25 private ARWs included the original pilot plus 24 additional files. Fifteen normal-orientation files from the same Sony camera/lens combination were compatible; ten files were rejected before preparation for unsupported EXIF orientations 6 or 8. Fourteen fresh jobs and the retained pilot produced 52 comparison JPEGs with passing output-dimension, exact sRGB-profile, file-hash, and decoded-pixel-hash checks. All 25 source hashes remained unchanged at the final audit.
+
+The pilot independently repeated one rendering recipe exactly. Fresh RAW development was not independently repeated for every additional file; the original repeatability result remains scoped to the pilot. Step 8 and broader human quality acceptance remain open. See [the evaluation report](REAL_PHOTO_EVALUATION.md) for the controlled settings, model observations, and remaining gaps.

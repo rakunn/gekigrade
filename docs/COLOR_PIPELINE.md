@@ -29,15 +29,15 @@ ImageMagick never receives the public working-TIFF or preview path as its writab
 5. Creative look in ACEScct, blended by bounded strength.
 6. Vignette in linear ACEScg.
 7. Crop in oriented, post-rotation normalized coordinates.
-8. Scale and unsharp mask with resolution-aware parameters.
+8. Scale in linear ACEScg.
 9. Colorimetric ACEScg to encoded sRGB through the pinned OCIO configuration.
-10. Pre-clamp gamut/clipping measurements, final clamp, JPEG encoding, sRGB ICC attachment, and independent verification.
+10. Pre-clamp measurements, final clamp, 8-bit quantization, output-pixel unsharp mask, JPEG encoding, sRGB ICC attachment, and independent verification.
 
 The pipeline does not use an ACES display look or an undocumented LUT. It does not describe JPEG post-development chromatic adaptation as RAW white balance.
 
 ## Preview and full resolution
 
-The same recipe evaluator receives either the prepared analysis image or full-resolution working TIFF. Normalized crop geometry and kernel radii referenced to a 2048-pixel long edge preserve logical equivalence. The manifest distinguishes the render target and dimensions.
+Candidate previews and exports both grade the full-resolution working TIFF with the same evaluator, then apply normalized crop geometry and resize to their target dimensions. The unsharp radius is 1.2 output pixels. The QA report distinguishes the render target and dimensions; resizing does not commute with nonlinear tone operations, so grading a downsampled analysis image is not an exact substitute for this production path.
 
 ## Export metadata
 
@@ -54,3 +54,49 @@ Strict reproducibility requires identical ACEScg/sRGB profile hashes, OCIO confi
 Before and after RAW development, and again at the RAW publication boundary, the source is opened without following symlinks and without blocking on special files. It must remain one regular-file identity throughout hashing and still match the recorded digest; disappearance, replacement, or another filesystem error fails development/preparation, removes produced output or any provisional manifest, and is retained in the run report where available. Lensfun mounts are trusted only when normalized camera make/model identifies exactly one database record. Doctor rejects a symlink in the RawTherapee CLI or any ancestor before reading bundle metadata, so readiness cannot combine version evidence from one application root with resources from another. It reads the regular, identity-stable `RTv4_Large` bytes and requires LittleCMS to identify an RGB display-class ICC before reporting RAW ready. The manifest's complete RAW readiness/tool/resource report is built from accepted snapshots of the selected RawTherapee bundle. The complete accepted output-profile status—including selected-bundle path, hash, availability, validity, color space, device class, and error—is carried into the manifest. Its path/hash, the developed TIFF path/hash, the camera profile/alias/constants snapshot, and the complete Lensfun database snapshot are revalidated immediately before and after publication.
 
 ExifTool doctor/version probes and metadata invocations disable external configuration with `-config ""` and receive only the same recorded C-locale environment with a fixed system `PATH`; caller home and ExifTool configuration variables are excluded. RAW signature reads and the source hashes immediately before and after metadata extraction use non-blocking, no-follow descriptors and require one stable regular-file identity; the descriptor size is rejected before hashing when it exceeds the 1 GiB limit. The doctor color probe receives and records the same ImageMagick environment as normalization and preview processing, including the fixed locale, module path isolation, and single-thread limits.
+
+## Versioned recipe dispatch
+
+The numbered ordering above describes edit-plan **1.0.0**. Its pixel math is frozen, including its ACEScct per-channel `highlight_rolloff` (0–0.5) and final channel clamp. A tagged union validates the exact explicit `schema_version`; unknown versions and mixed-version fields fail. `schemas/edit-plan-1.0.0.schema.json` retains the original contract, `edit-plan-2.0.0.schema.json` describes the new contract, and `edit-plan.schema.json` accepts both. Existing version-1 plans are not automatically converted. Crop-artifact version 2 is an independent contract from PR #2; older crop jobs still require preparation again as documented there.
+
+For **2.0.0**, use this exact order:
+
+1. Existing orientation/profile preparation and linear ACEScg rotation.
+2. Existing linear exposure (`exposure_ev`, −2 to +2 stops) and post-development Bradford color adaptation (`temperature_mired_shift`, −30 to +30 mired relative to the existing 6000 K reference).
+3. Existing ACEScct contrast (`contrast`, −0.25 to +0.25; multiplier `1+1.5*contrast` around 0.4135884), black lift (`black_lift`, 0–0.03 ACEScct units with the existing shadow weight), and saturation (`saturation`, −0.25 to +0.25; multiplier `1+saturation` about the existing weighted ACEScct channels). No version-1 global shoulder runs in this stage.
+4. Convert to linear ACEScg, apply shadow recovery then luminance highlight compression, and return to ACEScct. These are pointwise global operators, without masks or spatial analysis.
+5. Run the existing versioned look and blend in ACEScct **unchanged**. Its own version-1 shoulder and intentional color biases remain part of that look. Convert back to linear ACEScg.
+6. Existing vignette (0–0.25 fractional edge attenuation), normalized crop after geometry, and Lanczos3 resize in linear ACEScg. Rotation remains bounded to −5 to +5 degrees. Preview and export both start with the full working TIFF and use the same evaluator; resizing happens after grading.
+7. Pinned OCIO colorimetric conversion to linear sRGB, fixed output-gamut compression below, then pinned OCIO sRGB encoding.
+8. Measure immediately before channel clamp; clamp to [0,1], round to 8-bit, and apply existing Pillow unsharp masking (`sharpen`, 0–1, radius 1.2 output pixels, percent `round(80*sharpen)`, threshold 2). Measure again, encode JPEG with sRGB ICC, then decode and measure the actual JPEG. Sharpening is **after** quantization in the implemented version-1 path and remains so in version 2; it may introduce fresh clipping.
+
+### Shadow recovery
+
+`shadow_recovery_ev` is required, finite, and bounded to **0–2 stops**; 0 is identity. Set `Y = 0.2722287168 R + 0.6740817658 G + 0.0536895174 B` in linear ACEScg. For Y>0 set `t=max(1-Y/0.18,0)`, `gain=2^(shadow_recovery_ev*t^2)`, and `RGB'=RGB*gain`. For Y<=0 leave RGB unchanged. Black remains black; luminance at or above 18% is unchanged. The maximum limiting gain near black is 4, with the same scale on every channel. This preserves neutral patches and positive-luminance chromaticity, including when an individual channel is negative. It can amplify existing noise and cannot reveal absent information.
+
+For 0<Y<0.18 the luminance derivative is `gain*[1-2*ln(2)*EV*u*(1-u)]`, where `u=Y/0.18`. Since `u*(1-u)<=1/4`, the bracket remains at least `1-ln(2)>0` at 2 EV. The curve and first derivative meet identity at 18%. Increasing EV never darkens a positive-luminance pixel. This does not promise that the complete creative pipeline preserves neutrality or is monotonic in every independent RGB channel.
+
+### Luminance highlight compression
+
+`highlight_compression` is required, finite, and bounded to **0–1**, dimensionless; 0 is identity. For Y<=0.5 keep RGB unchanged. Above the fixed half-white knee let `d=Y-0.5`, `Y'=0.5+d/(1+2*highlight_compression*d)`, and `RGB'=RGB*(Y'/Y)`. The derivative above the knee is `1/(1+2*amount*d)^2`, strictly positive for finite Y. Value and slope are continuous at the knee. Increasing the amount never brightens highlights. At amount 1, Y=1 becomes 0.75 and arbitrarily large positive Y approaches 1; at 0<amount<1 the asymptote is `0.5+0.5/amount`, which can exceed output white. This operator preserves neutrals and chromaticity before later look/gamut operations. It does not guarantee every saturated RGB channel fits sRGB or reconstruct clipped RAW channels.
+
+### Fixed output-gamut compression
+
+The method `linear-srgb-radial-soft-0.95-v1` has no recipe parameter. In linear sRGB let `Y=0.2126 R+0.7152 G+0.0722 B` and `delta=RGB-Y`. For 0<Y<1, each channel's distance to its boundary is `b=1-Y` for positive delta and `b=Y` otherwise. Define `q=max(abs(delta)/b)`. Leave `q<=0.95` exactly unchanged. Above the knee let `q'=0.95+0.05*(q-0.95)/(0.05+q-0.95)` and output `Y+delta*(q'/q)`. This has continuous value/slope, preserves Y and RGB hue direction up to float32 rounding, and desaturates near-boundary colors smoothly. RGB direction preservation is not a claim of perceptual hue constancy in every viewing condition.
+
+Neutrals in [0,1] stay exact. Y<=0 maps to black, Y>=1 to white; retaining infeasible Y and chroma is mathematically impossible inside the cube. Existing all-channel clipping can therefore remain or increase. No hidden lift or luminance shoulder is added at this boundary. In-gamut interior colors remain exact, but highly saturated **in-gamut** colors above the 95% knee are deliberately compressed slightly. Final clamp still handles floating-point roundoff and the OCIO encoder's approximately +0.0000067 excursion at nominal white.
+
+## Stage-aware QA contract (report 2.0.0)
+
+Each candidate and export records `recipe_schema_version`, `output_gamut_method`, and four `stages`:
+
+| Stage | Pixels measured | What it isolates |
+|---|---|---|
+| `after_global_correction` | Full rotated frame, before look | Technical correction including the new tone operators when using v2 |
+| `after_creative_look` | Same full rotated frame, before vignette | Change introduced by the unchanged creative look |
+| `before_output_gamut` | Cropped/resized frame after vignette | Combined geometry/vignette/resize and colorimetric output behavior |
+| `before_output_clamp` | Same output frame after v2 gamut processing and sRGB encoding | Residual excursions immediately before clamp |
+
+Every stage uses unclamped encoded-sRGB measurements, records its scope/dimensions/pixel count, RGB minima/maxima, strict `<0`/`>1` any/all-channel percentages, and `<=1/255`/`>=254/255` shadow/highlight any/all-channel percentages. All pixels are measured in row tiles; no photo is sampled or modified by QA. Nonfinite input or transformed pixels fail instead of yielding misleading metrics. The first two scopes differ from the output crop: compare their percentages only with that denominator difference in mind. Clipping thresholds describe proximity to encoded endpoints; they are not proof that upstream detail was lost. Strict gamut counts include transform rounding; inspect extrema as well as percentages.
+
+`preclamp_low_percent` and `preclamp_high_percent` remain final-stage aliases. `post_quantization_and_sharpen` and `post_encode` expose later clipping separately. `pre_encode_sha256` hashes quantized/sharpened RGB bytes; `decoded_sha256` hashes actual JPEG-decoded RGB bytes, including JPEG loss. `geki qa` retains these measurements and independently rechecks saved candidate files. Export and QA rebuild warnings from current measurements; a replaced export cannot retain warnings from its previous JPEG, while other artifacts and legacy QA evidence remain represented. Warnings remain advisory and never choose a recipe or brighten a silhouette. No photographic preference follows from forcing these metrics to zero.

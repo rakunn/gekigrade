@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from functools import lru_cache
 from typing import Any, cast
 
@@ -10,8 +11,9 @@ import OpenImageIO as oiio
 import PyOpenColorIO as ocio
 from PIL import Image, ImageFilter
 
-from gekigrade.domain.models import CandidateRecipe
+from gekigrade.domain.models import AnyRecipe, CandidateRecipe, CandidateRecipeV2
 from gekigrade.grading.looks import LookDefinition
+from gekigrade.grading.tone import compress_highlights, recover_shadows
 
 FloatImage = npt.NDArray[np.float32]
 
@@ -151,7 +153,15 @@ def _vignette(pixels: FloatImage, strength: float) -> FloatImage:
     return cast(FloatImage, vignetted)
 
 
-def apply_recipe(pixels: FloatImage, recipe: CandidateRecipe, look: LookDefinition) -> FloatImage:
+def apply_recipe(
+    pixels: FloatImage,
+    recipe: AnyRecipe,
+    look: LookDefinition,
+    *,
+    observe: Callable[[str, FloatImage], None] | None = None,
+) -> FloatImage:
+    if not np.isfinite(pixels).all():
+        raise ValueError("recipe input must contain only finite pixels")
     result = _rotate(pixels, recipe.rotation_degrees)
     result *= np.float32(2.0**recipe.exposure_ev)
     result = _temperature_adaptation(result, recipe.temperature_mired_shift)
@@ -160,9 +170,21 @@ def apply_recipe(pixels: FloatImage, recipe: CandidateRecipe, look: LookDefiniti
         acescct,
         contrast=recipe.contrast,
         black_lift=recipe.black_lift,
-        highlight_rolloff=recipe.highlight_rolloff,
+        highlight_rolloff=recipe.highlight_rolloff if isinstance(recipe, CandidateRecipe) else 0.0,
         saturation=recipe.saturation,
     )
+    if isinstance(recipe, CandidateRecipeV2):
+        technical = _transform(acescct, "ACEScct", "ACEScg")
+        # Pointwise operators use bounded row tiles to avoid full-frame float64 temporaries.
+        for start in range(0, technical.shape[0], 256):
+            technical[start : start + 256] = compress_highlights(
+                recover_shadows(technical[start : start + 256], recipe.shadow_recovery_ev),
+                recipe.highlight_compression,
+            )
+        acescct = _transform(technical, "ACEScg", "ACEScct")
+        del technical
+    if observe is not None:
+        observe("after_global_correction", _transform(acescct, "ACEScct", "ACEScg"))
     operations = look.operations
     look_input = _temperature_adaptation(
         _transform(acescct, "ACEScct", "ACEScg"), operations.temperature_mired_shift
@@ -178,6 +200,8 @@ def apply_recipe(pixels: FloatImage, recipe: CandidateRecipe, look: LookDefiniti
     )
     acescct = acescct + (looked - acescct) * np.float32(recipe.look.strength)
     result = _transform(acescct, "ACEScct", "ACEScg")
+    if observe is not None:
+        observe("after_creative_look", result)
     return _vignette(result, recipe.vignette).astype(np.float32)
 
 

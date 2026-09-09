@@ -100,3 +100,60 @@ def test_plan_rejects_wrong_candidate_count_and_bad_hash() -> None:
     bad_hash["source_sha256"] = "not-a-sha256"
     with pytest.raises(ValidationError):
         EditPlan.model_validate(bad_hash)
+
+
+def test_versions_dispatch_to_separate_recipe_types_and_reject_mixed_controls() -> None:
+    from gekigrade.domain.models import EDIT_PLAN_ADAPTER, CandidateRecipe, CandidateRecipeV2
+    from gekigrade.pipeline.prepare import _example_plan_v2
+
+    legacy = valid_plan_data()
+    modern = _example_plan_v2("a" * 64)
+    assert isinstance(EDIT_PLAN_ADAPTER.validate_python(legacy).candidates[0], CandidateRecipe)
+    assert isinstance(EDIT_PLAN_ADAPTER.validate_python(modern).candidates[0], CandidateRecipeV2)
+    legacy["schema_version"] = "2.0.0"
+    modern["schema_version"] = "1.0.0"
+    for data in (legacy, modern):
+        with pytest.raises(ValidationError):
+            EDIT_PLAN_ADAPTER.validate_python(data)
+    modern["schema_version"] = "3.0.0"
+    with pytest.raises(ValidationError):
+        EDIT_PLAN_ADAPTER.validate_python(modern)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("shadow_recovery_ev", -0.01),
+        ("shadow_recovery_ev", 2.01),
+        ("highlight_compression", -0.01),
+        ("highlight_compression", 1.01),
+        ("shadow_recovery_ev", float("nan")),
+        ("highlight_compression", float("inf")),
+        ("highlight_rolloff", 0.1),
+        ("output_gamut_strength", 0.5),
+    ],
+)
+def test_v2_bounds_and_fixed_gamut_contract(field: str, value: float) -> None:
+    from gekigrade.domain.models import EDIT_PLAN_ADAPTER
+    from gekigrade.pipeline.prepare import _example_plan_v2
+
+    data = _example_plan_v2("a" * 64)
+    data["candidates"][0][field] = value
+    with pytest.raises(ValidationError):
+        EDIT_PLAN_ADAPTER.validate_python(data)
+
+
+def test_v2_requires_exactly_three_distinct_candidates_and_explicit_controls() -> None:
+    from gekigrade.domain.models import EDIT_PLAN_ADAPTER
+    from gekigrade.pipeline.prepare import _example_plan_v2
+
+    for mutation in ("duplicate", "short", "missing"):
+        data = _example_plan_v2("a" * 64)
+        if mutation == "duplicate":
+            data["candidates"][1]["id"] = data["candidates"][0]["id"]
+        elif mutation == "short":
+            data["candidates"].pop()
+        else:
+            del data["candidates"][0]["shadow_recovery_ev"]
+        with pytest.raises(ValidationError):
+            EDIT_PLAN_ADAPTER.validate_python(data)

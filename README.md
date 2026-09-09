@@ -71,3 +71,17 @@ uv run geki prepare /path/to/photo.ARW --output work/photo-raw
 - General RAW quality, paired camera-JPEG fidelity, perspective correction, semantic masking, publishing, API orchestration, and desktop UI remain unproven or deferred.
 
 See [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) for selection and licensing details and [`docs/RAW_MANUAL_TEST.md`](docs/RAW_MANUAL_TEST.md) for the executed ARW compatibility procedure and remaining visual checks.
+
+## Global tone controls and stage QA
+
+Edit-plan `1.0.0` keeps its existing pixel semantics. New opt-in `2.0.0` plans replace the global `highlight_rolloff` field with required `shadow_recovery_ev` (0–2 stops, fades out at 18% linear luminance) and `highlight_compression` (0–1, luminance shoulder above 50%). They also apply fixed output-gamut compression. Versioned look definitions are unchanged; do not rename a legacy plan's version without explicitly replacing its controls.
+
+Preparation writes `plans/example-plan-v2.json` alongside the legacy example, plus both versioned schemas and their union. The new example starts with **zero shadow recovery** and 0.5 highlight compression; it is a starting point for visual comparison, not a scene recommendation:
+
+```bash
+uv run geki validate-plan work/sample/plans/example-plan-v2.json
+uv run geki render work/sample --plan work/sample/plans/example-plan-v2.json
+uv run geki qa work/sample
+```
+
+Inspect `qa/report.json`: correction, creative-look, pre-gamut, and pre-clamp measurements show where changes occur. Full-frame and cropped-output percentages have different denominators. Post-sharpening and decoded-JPEG clipping are measured separately. Gamut compression may trade saturation for fewer channel excursions and cannot retain out-of-range luminance; shadow recovery can amplify noise. Dark silhouettes can remain intentional. This slice has one private backlit RAW A/B evaluation, not general quality acceptance. See [the math and QA contract](docs/COLOR_PIPELINE.md) and [operator comparison](docs/TONE_EXPERIMENT.md).

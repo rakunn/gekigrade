@@ -7,13 +7,15 @@ from typing import Any, Literal
 from PIL import Image
 
 from gekigrade.domain.jsonio import read_json, write_json
-from gekigrade.domain.models import EditPlan
+from gekigrade.domain.models import EDIT_PLAN_ADAPTER
 from gekigrade.domain.paths import job_child
 from gekigrade.grading.engine import read_linear_image
 from gekigrade.pipeline.manifests import assert_source_unchanged, refresh_manifest
 from gekigrade.pipeline.render import (
     _crop_map,
+    current_report_warnings,
     evaluate_candidate,
+    record_jpeg_qa,
     save_srgb_jpeg,
     validate_plan_model_for_job,
 )
@@ -82,7 +84,7 @@ def export_job(
     candidate_data = metadata["candidates"][selection["candidate_id"]]["recipe"]
     plan = validate_plan_model_for_job(
         job,
-        EditPlan.model_validate(metadata["plan"]),
+        EDIT_PLAN_ADAPTER.validate_python(metadata["plan"]),
         working_dimensions=working_dimensions,
     )
     candidate = next(item for item in plan.candidates if item.id == selection["candidate_id"])
@@ -108,18 +110,13 @@ def export_job(
     source: dict[str, Any] = read_json(job_child(job, "source.json"))
     exif = _safe_exif(source) if metadata_policy == "safe" else None
     save_srgb_jpeg(pixels, output, quality=quality, exif=exif)
-    with Image.open(output) as verified:
-        qa["icc_profile_embedded"] = bool(verified.info.get("icc_profile"))
-        qa["encoded_width"], qa["encoded_height"] = verified.size
+    record_jpeg_qa(output, qa)
+    qa["pre_encode_sha256"] = hashlib.sha256(pixels.tobytes()).hexdigest()
     qa["file_sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
     report: dict[str, Any] = read_json(job_child(job, "qa/report.json"))
+    report["schema_version"] = "2.0.0"
     report["exports"][preset] = qa
-    warnings: list[str] = list(report.get("warnings", []))
-    if qa["preclamp_low_percent"] > 1.0:
-        warnings.append(f"{preset}: pre-clamp low-gamut pixels exceed 1.0%")
-    if qa["preclamp_high_percent"] > 1.0:
-        warnings.append(f"{preset}: pre-clamp high-gamut pixels exceed 1.0%")
-    report["warnings"] = sorted(set(warnings))
+    report["warnings"] = current_report_warnings(report)
     write_json(job_child(job, "qa/report.json"), report)
     refresh_manifest(job, state="exported", plan_sha256=selection["plan_sha256"])
     return output

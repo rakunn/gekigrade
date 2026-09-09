@@ -1,0 +1,83 @@
+{
+  "captured_revision": "d7609649cc1696ba24866e54f801d026b361b0ec",
+  "records": [
+    {
+      "recipe": {
+        "description": "Conservative clean correction",
+        "rotation_degrees": -1.2,
+        "exposure_ev": -0.4,
+        "temperature_mired_shift": -10,
+        "contrast": -0.1,
+        "black_lift": 0,
+        "highlight_rolloff": 0,
+        "saturation": -0.2,
+        "vignette": 0,
+        "sharpen": 0,
+        "crop_id": "feed-4x5-center",
+        "id": "01-natural-clean",
+        "look": {
+          "id": "natural-clean",
+          "version": "1.0.0",
+          "strength": 0.5
+        }
+      },
+      "linear_sha256": "f9c340df2faacec9b07e103bf4b5ffc4cb42b0bc5690b35431cf08946da6e984",
+      "integer_sha256": "40e83ffd967852cf8bd6712576c684a12b261ebcafd510042f15b676494eb3ee",
+      "jpeg_decoded_sha256": "c238816bbb6350db19589d38ed745fc310334095be050d5e4203345d9a68ee88",
+      "preclamp_low_percent": 0.41666667,
+      "preclamp_high_percent": 1.25
+    },
+    {
+      "recipe": {
+        "description": "Warm editorial alternative",
+        "rotation_degrees": 0,
+        "exposure_ev": 0.15,
+        "temperature_mired_shift": 3,
+        "contrast": 0.03,
+        "black_lift": 0.005,
+        "highlight_rolloff": 0.22,
+        "saturation": 0.04,
+        "vignette": 0.02,
+        "sharpen": 0.25,
+        "crop_id": "feed-4x5-center",
+        "id": "02-warm-editorial",
+        "look": {
+          "id": "warm-editorial",
+          "version": "1.0.0",
+          "strength": 0.6
+        }
+      },
+      "linear_sha256": "4bc610eaaa2abff5d29d52ad36bc46f756469badbaf1af9c0710fecd947d1dd8",
+      "integer_sha256": "7fd8d2603efd28e2d0d8dcbf912b5088c413ca4aab711d1a8ec79e5681809f5f",
+      "jpeg_decoded_sha256": "5acd4d4fb57b68092de690b1747e8a0515ffd54439cac80ae331968397e51520",
+      "preclamp_low_percent": 1.11111111,
+      "preclamp_high_percent": 46.66666667
+    },
+    {
+      "recipe": {
+        "description": "Muted cinematic alternative",
+        "rotation_degrees": 2.1,
+        "exposure_ev": 0.8,
+        "temperature_mired_shift": 20,
+        "contrast": 0.2,
+        "black_lift": 0.02,
+        "highlight_rolloff": 0.5,
+        "saturation": 0.2,
+        "vignette": 0.2,
+        "sharpen": 0.8,
+        "crop_id": "feed-4x5-center",
+        "id": "03-muted-cinematic",
+        "look": {
+          "id": "muted-cinematic",
+          "version": "1.0.0",
+          "strength": 0.55
+        }
+      },
+      "linear_sha256": "9181604bb2928c1a19fadf107bf0f3d778a674be3ef8ad790ac4d81dad5aa628",
+      "integer_sha256": "8e7e4ad3064436d865a300f260427062e2181beb90e1d8723428bf1825e6478d",
+      "jpeg_decoded_sha256": "3e7ecd6db0a0d3b387b3961714ed73386d6488aefade2355525e325231cacb81",
+      "preclamp_low_percent": 0.0,
+      "preclamp_high_percent": 73.33333333
+    }
+  ]
+}

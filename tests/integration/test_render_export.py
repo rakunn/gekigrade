@@ -4,12 +4,14 @@ import hashlib
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 from PIL import Image
 
 from gekigrade.geometry.crops import CROP_SCHEMA_VERSION, generate_crop_candidates
 from gekigrade.pipeline.export import export_job, select_candidate
 from gekigrade.pipeline.prepare import prepare_job
+from gekigrade.pipeline.qa import run_qa
 from gekigrade.pipeline.render import PlanValidationError, render_job, validate_plan_for_job
 
 
@@ -17,12 +19,13 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.mark.parametrize("version", ["1.0.0", "2.0.0"])
 def test_render_is_repeatable_and_selected_recipe_exports_profiled_feed(
-    tagged_oriented_jpeg: Path, tmp_path: Path
+    tagged_oriented_jpeg: Path, tmp_path: Path, version: str
 ) -> None:
     source_hash = _sha256(tagged_oriented_jpeg)
     job = prepare_job(tagged_oriented_jpeg, tmp_path / "job")
-    plan = job / "plans/example-plan.json"
+    plan = job / ("plans/example-plan.json" if version == "1.0.0" else "plans/example-plan-v2.json")
 
     validated = validate_plan_for_job(job, plan)
     assert validated.source_sha256 == source_hash
@@ -53,10 +56,24 @@ def test_render_is_repeatable_and_selected_recipe_exports_profiled_feed(
     assert _sha256(tagged_oriented_jpeg) == source_hash
     first_export_hash = _sha256(output)
     assert _sha256(export_job(job, preset="instagram-feed", quality=91)) == first_export_hash
+    run_qa(job)
 
     report = json.loads((job / "qa/report.json").read_text(encoding="utf-8"))
     assert report["candidates"]["02-warm-editorial"]["finite"] is True
     assert isinstance(report["warnings"], list)
+    assert report["schema_version"] == "2.0.0"
+    exported = report["exports"]["instagram-feed"]
+    assert exported["recipe_schema_version"] == version
+    assert exported["post_encode"]["pixel_count"] == 1080 * 1350
+    with Image.open(output) as image:
+        decoded_hash = hashlib.sha256(np.asarray(image.convert("RGB")).tobytes()).hexdigest()
+    assert exported["decoded_sha256"] == decoded_hash
+    assert set(exported["stages"]) == {
+        "after_global_correction",
+        "after_creative_look",
+        "before_output_gamut",
+        "before_output_clamp",
+    }
     manifest = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["plan_sha256"]
     assert manifest["artifacts"]["output/instagram-feed.jpg"]["sha256"] == _sha256(output)
@@ -213,3 +230,44 @@ def test_crop_document_requires_an_object_root(
         match="crop candidates must be a JSON object",
     ):
         validate_plan_for_job(job, job / "plans/example-plan.json")
+
+
+def test_reexport_replaces_warnings_and_retains_other_current_artifacts(
+    tagged_oriented_jpeg: Path, tmp_path: Path
+) -> None:
+    job = prepare_job(tagged_oriented_jpeg, tmp_path / "job")
+    plan_path = job / "plans/example-plan.json"
+    plan = json.loads(plan_path.read_text())
+    for index, candidate in enumerate(plan["candidates"]):
+        candidate.update(
+            exposure_ev=2.0 if index == 0 else -2.0, highlight_rolloff=0.0, sharpen=0.0
+        )
+        candidate["look"]["strength"] = 0.0
+    plan_path.write_text(json.dumps(plan))
+    render_job(job, plan_path)
+    select_candidate(job, "01-natural-clean")
+    export_job(job, preset="instagram-feed", quality=50)
+    export_job(job, preset="full-quality", quality=50)
+    report = json.loads((job / "qa/report.json").read_text())
+    old_feed = [warning for warning in report["warnings"] if warning.startswith("instagram-feed:")]
+    retained = [
+        warning for warning in report["warnings"] if not warning.startswith("instagram-feed:")
+    ]
+    assert any("high-gamut" in warning for warning in old_feed)
+    assert any("post-encode all-channel highlight" in warning for warning in old_feed)
+    assert any(warning.startswith("full-quality:") for warning in retained)
+    assert any(warning.startswith("01-natural-clean:") for warning in retained)
+
+    select_candidate(job, "02-warm-editorial")
+    export_job(job, preset="instagram-feed", quality=95)
+    report = json.loads((job / "qa/report.json").read_text())
+    assert report["exports"]["instagram-feed"]["preclamp_high_percent"] == 0.0
+    assert (
+        report["exports"]["instagram-feed"]["post_encode"]["clipping"]["highlight_all_percent"]
+        == 0.0
+    )
+    assert not any(warning in report["warnings"] for warning in old_feed)
+    assert all(warning in report["warnings"] for warning in retained)
+    run_qa(job)
+    report = json.loads((job / "qa/report.json").read_text())
+    assert not any(warning in report["warnings"] for warning in old_feed)

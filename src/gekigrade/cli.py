@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from gekigrade.doctor import build_doctor_report
 from gekigrade.domain.jsonio import read_json
-from gekigrade.domain.models import EditPlan
+from gekigrade.domain.models import EDIT_PLAN_ADAPTER
 from gekigrade.grading.looks import LookError, get_look
 from gekigrade.pipeline.export import export_job, select_candidate
 from gekigrade.pipeline.prepare import inspect_photo, prepare_job
@@ -103,7 +103,7 @@ def validate_plan_command(
         if resolved_job is not None:
             validated = validate_plan_for_job(resolved_job, plan)
         else:
-            validated = EditPlan.model_validate_json(plan.read_text(encoding="utf-8"))
+            validated = EDIT_PLAN_ADAPTER.validate_json(plan.read_text(encoding="utf-8"))
             for candidate in validated.candidates:
                 look = get_look(candidate.look.id, candidate.look.version)
                 if not look.strength_range[0] <= candidate.look.strength <= look.strength_range[1]:

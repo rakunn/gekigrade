@@ -57,3 +57,9 @@ User or validation errors exit with code 2; missing dependencies with 3; process
 ## Extension points
 
 A replaceable RAW adapter now produces the same working-image contract from an explicit PP3 profile. A future planner consumes current artifacts and emits the same plan contract. Local adjustments may be added only through a new schema version with typed masks in the same post-geometry coordinate system. No current abstraction downloads models or anticipates a UI.
+
+## Versioned global tone and measurement boundary
+
+The edit-plan reader dispatches the explicit `schema_version` to independent version-1 and version-2 Pydantic models. Legacy `CandidateRecipe` pixels retain their old path; `CandidateRecipeV2` adds bounded luminance operators in `grading/tone.py` and a fixed linear-sRGB gamut stage. CLI handlers use the same union validator as render/export. Selection preserves the exact versioned plan rather than inferring a version from candidate fields. Look assets remain separate version-1 definitions.
+
+`apply_recipe` supplies observational callbacks at the global and creative boundaries; pipeline evaluation measures them immediately without retaining full-frame snapshots. `analysis/stages.py` measures every pixel in bounded row tiles and never feeds measurements back into rendering. Output evaluation adds crop/resize, gamut, and preclamp boundaries; JPEG publication reads back actual encoded pixels. QA report version 2 distinguishes all these scopes and records the recipe version and fixed gamut-method identifier. Versioned schemas and examples are generated at preparation; artifact hashes in the existing manifest bind them alongside plan/candidate/export provenance. No API, UI, local mask, or generative path is introduced.

@@ -55,7 +55,7 @@ from gekigrade.doctor import (
 )
 from gekigrade.doctor import EXIFTOOL_ENVIRONMENT as DOCTOR_EXIFTOOL_ENVIRONMENT
 from gekigrade.domain.jsonio import canonical_json_bytes, write_json
-from gekigrade.domain.models import EditPlan
+from gekigrade.domain.models import EditPlan, EditPlanV2, edit_plan_schema
 from gekigrade.domain.paths import create_job_directory
 from gekigrade.geometry.crops import CROP_SCHEMA_VERSION, generate_crop_candidates
 from gekigrade.grading.looks import looks_as_json
@@ -640,6 +640,16 @@ def _example_plan(source_sha256: str) -> dict[str, Any]:
     return {"schema_version": "1.0.0", "source_sha256": source_sha256, "candidates": candidates}
 
 
+def _example_plan_v2(source_sha256: str) -> dict[str, Any]:
+    plan = _example_plan(source_sha256)
+    plan["schema_version"] = "2.0.0"
+    for candidate in plan["candidates"]:
+        del candidate["highlight_rolloff"]
+        candidate["shadow_recovery_ev"] = 0.0
+        candidate["highlight_compression"] = 0.5
+    return EditPlanV2.model_validate(plan).model_dump(mode="json")
+
+
 def _artifact_manifest(
     job: Path,
     source: dict[str, Any],
@@ -972,7 +982,10 @@ def prepare_job(
     _contact_sheet(preview, candidates, job / "crops/contact-sheet.jpg")
     write_json(job / "plans/example-plan.json", _example_plan(source["source_sha256"]))
     write_json(job / "looks.json", {"schema_version": "1.0.0", "looks": looks_as_json()})
-    write_json(job / "edit-plan.schema.json", EditPlan.model_json_schema())
+    write_json(job / "edit-plan.schema.json", edit_plan_schema())
+    write_json(job / "edit-plan-1.0.0.schema.json", EditPlan.model_json_schema())
+    write_json(job / "edit-plan-2.0.0.schema.json", EditPlanV2.model_json_schema())
+    write_json(job / "plans/example-plan-v2.json", _example_plan_v2(source["source_sha256"]))
     if not _artifact_matches(working, working_sha256) or not _artifact_matches(
         preview, preview_sha256
     ):

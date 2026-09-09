@@ -20,6 +20,10 @@ Status: deterministic anchor alternatives implemented. For each social aspect, p
 
 Tune the three existing looks using the private evaluation set and add no look whose process space or limitations are unclear. Acceptance requires preference and artifact scores, not synthetic tests alone.
 
+### Approved intervening slice — global tone and stage QA
+
+Status: implemented with explicit edit-plan `2.0.0`, observational QA report `2.0.0`, bounded global shadow recovery, a luminance highlight shoulder, and fixed output-gamut compression. Version-1 rendering remains covered by pre-change pixel goldens. Conservative alternatives were compared before selecting operators; one private backlit Sony RAW has a fresh-development/full-resolution A/B evaluation recorded in `TONE_EXPERIMENT.md`. This work is stacked on PR #2's unchanged crop branch and does not merge it. Curated look definitions remain unchanged. Wider scene coverage, trusted manual/paired-camera comparisons, human preference scores, and noise/artifact evaluation remain pending. No semantic masks, RAW-specific controls, APIs, LUTs, or UI are included.
+
 ## Milestone 5 — Codex-generated plans
 
 Evaluate the repository prompts, schema adherence, parameter conservatism, and candidate-ranking usefulness. Codex remains the interactive planner; no API integration is introduced.

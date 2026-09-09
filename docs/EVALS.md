@@ -69,3 +69,14 @@ The eventual set should contain approximately 20–30 user-owned photos spanning
 ## Regression policy
 
 Pinned-environment changes require exact decoded-pixel comparisons for programmatic fixtures. Intentional operation or tool upgrades require a decision entry, new baselines, technical diff metrics, and visual review on the private set. A test update alone cannot justify a changed image.
+
+## Global tone and stage QA acceptance
+
+- Preserve `1.0.0` model validation and exact linear, quantized, and decoded-JPEG pixels against hashes captured at `d760964` before adding tone code. Keep the original schema available. Reject unknown versions, mixed-version controls, missing new controls, arbitrary gamut parameters, and invalid/NaN/Inf parameters.
+- Verify neutral gradients, positive luminance monotonicity across the complete allowed control ranges, exact zero-control identity for the operators, preserved black and midtones, neutral patches, saturated colors, chromaticity/RGB direction expectations, finite values, and no input mutation. Monotonicity applies to the specified luminance curves and fixed-Y chroma rays, not arbitrary combined creative RGB operations.
+- Verify fixed gamut compression's exact interior/neutral behavior, continuous chroma response, feasible-luminance preservation, and explicit black/white handling for infeasible luminance. Keep thresholds fixed and prohibit a planner strength control.
+- Measure every pixel at all four stages, including dimensions/scope and channel extrema. Observing a stage must not change recipe pixels. Full-frame and output-frame denominators must be explicit; callbacks and row tiles must reproduce direct measurements.
+- Exercise versioned plans through preparation, validation, repeated candidate render, selection, QA, and repeated full/social export. Verify actual JPEG decoded hashes and post-encode clipping, not only pre-encode arrays. Stage QA is advisory; intentional dark silhouettes are not automatic failures.
+- A full-size private RAW A/B must preserve the source hash, use the same accepted working pixels, recipe crop/look/non-tone settings, target size, and encoder settings, and retain all source paths, photos, and derived outputs in ignored local storage. Re-develop through the pinned adapter when available and compare the intermediate to the prior accepted artifact. Repeat the new output exactly. Report technical stage changes and honest visual findings, including regressions or uncertainty; synthetic fixtures alone cannot justify quality claims.
+
+The executed operator comparison and one-scene result are in [`TONE_EXPERIMENT.md`](TONE_EXPERIMENT.md). The broader 20–30-image evaluation and user preference scoring remain open.

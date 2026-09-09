@@ -4,12 +4,14 @@ import hashlib
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 from PIL import Image
 
 from gekigrade.geometry.crops import CROP_SCHEMA_VERSION, generate_crop_candidates
 from gekigrade.pipeline.export import export_job, select_candidate
 from gekigrade.pipeline.prepare import prepare_job
+from gekigrade.pipeline.qa import run_qa
 from gekigrade.pipeline.render import PlanValidationError, render_job, validate_plan_for_job
 
 
@@ -17,12 +19,13 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.mark.parametrize("version", ["1.0.0", "2.0.0"])
 def test_render_is_repeatable_and_selected_recipe_exports_profiled_feed(
-    tagged_oriented_jpeg: Path, tmp_path: Path
+    tagged_oriented_jpeg: Path, tmp_path: Path, version: str
 ) -> None:
     source_hash = _sha256(tagged_oriented_jpeg)
     job = prepare_job(tagged_oriented_jpeg, tmp_path / "job")
-    plan = job / "plans/example-plan.json"
+    plan = job / ("plans/example-plan.json" if version == "1.0.0" else "plans/example-plan-v2.json")
 
     validated = validate_plan_for_job(job, plan)
     assert validated.source_sha256 == source_hash
@@ -53,10 +56,24 @@ def test_render_is_repeatable_and_selected_recipe_exports_profiled_feed(
     assert _sha256(tagged_oriented_jpeg) == source_hash
     first_export_hash = _sha256(output)
     assert _sha256(export_job(job, preset="instagram-feed", quality=91)) == first_export_hash
+    run_qa(job)
 
     report = json.loads((job / "qa/report.json").read_text(encoding="utf-8"))
     assert report["candidates"]["02-warm-editorial"]["finite"] is True
     assert isinstance(report["warnings"], list)
+    assert report["schema_version"] == "2.0.0"
+    exported = report["exports"]["instagram-feed"]
+    assert exported["recipe_schema_version"] == version
+    assert exported["post_encode"]["pixel_count"] == 1080 * 1350
+    with Image.open(output) as image:
+        decoded_hash = hashlib.sha256(np.asarray(image.convert("RGB")).tobytes()).hexdigest()
+    assert exported["decoded_sha256"] == decoded_hash
+    assert set(exported["stages"]) == {
+        "after_global_correction",
+        "after_creative_look",
+        "before_output_gamut",
+        "before_output_clamp",
+    }
     manifest = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["plan_sha256"]
     assert manifest["artifacts"]["output/instagram-feed.jpg"]["sha256"] == _sha256(output)

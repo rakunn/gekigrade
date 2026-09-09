@@ -8,12 +8,14 @@ import numpy as np
 from PIL import Image, ImageDraw
 from pydantic import ValidationError
 
+from gekigrade.analysis.stages import measure_stage
 from gekigrade.doctor import SRGB_PROFILE
 from gekigrade.domain.jsonio import canonical_json_bytes, read_json, write_json
-from gekigrade.domain.models import CandidateRecipe, EditPlan
+from gekigrade.domain.models import EDIT_PLAN_ADAPTER, AnyEditPlan, AnyRecipe, CandidateRecipeV2
 from gekigrade.domain.paths import job_child
 from gekigrade.geometry.crops import CROP_SCHEMA_VERSION, generate_crop_candidates
 from gekigrade.grading.engine import (
+    _transform,
     apply_recipe,
     crop_normalized,
     linear_to_encoded_srgb,
@@ -22,6 +24,7 @@ from gekigrade.grading.engine import (
     sharpen_uint8,
 )
 from gekigrade.grading.looks import LookError, get_look
+from gekigrade.grading.tone import GAMUT_METHOD, compress_output_gamut
 from gekigrade.pipeline.manifests import assert_source_unchanged, refresh_manifest
 
 
@@ -63,9 +66,9 @@ def validate_plan_for_job(
     plan_path: Path,
     *,
     working_dimensions: tuple[int, int] | None = None,
-) -> EditPlan:
+) -> AnyEditPlan:
     try:
-        plan = EditPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
+        plan = EDIT_PLAN_ADAPTER.validate_json(plan_path.read_text(encoding="utf-8"))
     except (OSError, ValidationError) as exc:
         raise PlanValidationError(f"plan schema validation failed: {exc}") from exc
     return validate_plan_model_for_job(job, plan, working_dimensions=working_dimensions)
@@ -73,10 +76,10 @@ def validate_plan_for_job(
 
 def validate_plan_model_for_job(
     job: Path,
-    plan: EditPlan,
+    plan: AnyEditPlan,
     *,
     working_dimensions: tuple[int, int] | None = None,
-) -> EditPlan:
+) -> AnyEditPlan:
     manifest = assert_source_unchanged(job)
     if plan.source_sha256 != manifest["source_sha256"]:
         raise PlanValidationError("plan source checksum does not match the prepared job")
@@ -111,14 +114,21 @@ def _target_dimensions(width: int, height: int, max_edge: int | None) -> tuple[i
 
 def evaluate_candidate(
     working_pixels: np.ndarray[Any, np.dtype[np.float32]],
-    candidate: CandidateRecipe,
+    candidate: AnyRecipe,
     crop: dict[str, Any],
     *,
     target_dimensions: tuple[int, int] | None = None,
     max_edge: int | None = None,
 ) -> tuple[np.ndarray[Any, np.dtype[np.uint8]], dict[str, Any]]:
     look = get_look(candidate.look.id, candidate.look.version)
-    processed = apply_recipe(working_pixels, candidate, look)
+    stages: dict[str, Any] = {}
+
+    def observe(name: str, pixels: np.ndarray[Any, np.dtype[np.float32]]) -> None:
+        stages[name] = measure_stage(
+            pixels, to_encoded_srgb=linear_to_encoded_srgb, scope="full-frame-after-rotation"
+        )
+
+    processed = apply_recipe(working_pixels, candidate, look, observe=observe)
     cropped = crop_normalized(processed, crop)
     if target_dimensions is not None:
         output_width, output_height = target_dimensions
@@ -129,6 +139,17 @@ def evaluate_candidate(
     if (cropped.shape[1], cropped.shape[0]) != (output_width, output_height):
         cropped = resize_float(cropped, output_width, output_height)
     encoded = linear_to_encoded_srgb(cropped)
+    stages["before_output_gamut"] = measure_stage(encoded)
+    gamut_method = "legacy-channel-clamp"
+    if isinstance(candidate, CandidateRecipeV2):
+        srgb_linear = _transform(cropped, "ACEScg", "Linear Rec.709 (sRGB)")
+        for start in range(0, srgb_linear.shape[0], 256):
+            srgb_linear[start : start + 256] = compress_output_gamut(
+                srgb_linear[start : start + 256]
+            )
+        encoded = _transform(srgb_linear, "Linear Rec.709 (sRGB)", "sRGB Encoded Rec.709 (sRGB)")
+        gamut_method = GAMUT_METHOD
+    stages["before_output_clamp"] = measure_stage(encoded)
     finite = bool(np.isfinite(encoded).all())
     if not finite:
         raise RuntimeError(f"candidate {candidate.id} produced NaN or infinite pixels")
@@ -137,6 +158,10 @@ def evaluate_candidate(
     integer = np.rint(np.clip(encoded, 0.0, 1.0) * 255.0).astype(np.uint8)
     integer = sharpen_uint8(integer, candidate.sharpen)
     qa = {
+        "recipe_schema_version": "2.0.0" if isinstance(candidate, CandidateRecipeV2) else "1.0.0",
+        "output_gamut_method": gamut_method,
+        "stages": stages,
+        "post_quantization_and_sharpen": measure_stage(integer.astype(np.float32) / 255.0),
         "finite": finite,
         "preclamp_low_percent": round(preclamp_low, 8),
         "preclamp_high_percent": round(preclamp_high, 8),
@@ -144,6 +169,30 @@ def evaluate_candidate(
         "height": output_height,
     }
     return integer, qa
+
+
+def record_jpeg_qa(path: Path, qa: dict[str, Any]) -> None:
+    """Read the actual lossy output rather than label pre-encode bytes as decoded pixels."""
+    with Image.open(path) as opened:
+        qa["icc_profile_embedded"] = bool(opened.info.get("icc_profile"))
+        qa["encoded_width"], qa["encoded_height"] = opened.size
+        decoded = np.asarray(opened.convert("RGB"), dtype=np.uint8)
+    qa["decoded_sha256"] = hashlib.sha256(decoded.tobytes()).hexdigest()
+    qa["post_encode"] = measure_stage(decoded.astype(np.float32) / 255.0)
+
+
+def gamut_warnings(identifier: str, qa: dict[str, Any]) -> list[str]:
+    warnings = []
+    for name, stage in qa["stages"].items():
+        for side in ("low", "high"):
+            if stage["out_of_gamut"][f"{side}_any_percent"] > PRECLAMP_WARNING_PERCENT:
+                warnings.append(
+                    f"{identifier}: {name} {side}-gamut pixels exceed {PRECLAMP_WARNING_PERCENT}%"
+                )
+    for tone in ("shadow", "highlight"):
+        if qa["post_encode"]["clipping"][f"{tone}_all_percent"] > 1.0:
+            warnings.append(f"{identifier}: post-encode all-channel {tone} clipping exceeds 1.0%")
+    return warnings
 
 
 def save_srgb_jpeg(
@@ -198,17 +247,9 @@ def render_job(job_path: Path, plan_path: Path) -> Path:
         pixels, qa = evaluate_candidate(working, candidate, crops[candidate.crop_id], max_edge=1200)
         output = job_child(job, f"candidates/{candidate.id}.jpg")
         save_srgb_jpeg(pixels, output, quality=92)
-        with Image.open(output) as verified:
-            qa["icc_profile_embedded"] = bool(verified.info.get("icc_profile"))
-        qa["decoded_sha256"] = hashlib.sha256(pixels.tobytes()).hexdigest()
-        if qa["preclamp_low_percent"] > PRECLAMP_WARNING_PERCENT:
-            warnings.append(
-                f"{candidate.id}: pre-clamp low-gamut pixels exceed {PRECLAMP_WARNING_PERCENT}%"
-            )
-        if qa["preclamp_high_percent"] > PRECLAMP_WARNING_PERCENT:
-            warnings.append(
-                f"{candidate.id}: pre-clamp high-gamut pixels exceed {PRECLAMP_WARNING_PERCENT}%"
-            )
+        record_jpeg_qa(output, qa)
+        qa["pre_encode_sha256"] = hashlib.sha256(pixels.tobytes()).hexdigest()
+        warnings.extend(gamut_warnings(candidate.id, qa))
         qa_candidates[candidate.id] = qa
         metadata_candidates[candidate.id] = {
             "recipe": candidate.model_dump(mode="json"),
@@ -231,7 +272,7 @@ def render_job(job_path: Path, plan_path: Path) -> Path:
     write_json(
         job_child(job, "qa/report.json"),
         {
-            "schema_version": "1.0.0",
+            "schema_version": "2.0.0",
             "candidates": qa_candidates,
             "exports": {},
             "warnings": warnings,
